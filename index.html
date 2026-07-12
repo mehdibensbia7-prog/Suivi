@@ -2,33 +2,64 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Suivi Ventes Pro</title>
+    <title>Centre d'Appel - Gestion Ventes</title>
+    <!-- Bibliothèques -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f4f4f9; }
+        .nav { margin-bottom: 20px; }
+        .tab-content { display: none; padding: 20px; background: #fff; border: 1px solid #ccc; }
+        .active { display: block; }
+        .controls { margin-bottom: 15px; }
+    </style>
 </head>
 <body>
-    <h2>Interface de Suivi (Veuillez utiliser des fichiers .xlsx)</h2>
-    <input type="file" id="fileInput" accept=".xlsx" />
-    <div id="table-container"></div>
+
+    <div class="nav">
+        <button onclick="showTab('suivi')">Suivi des Ventes</button>
+        <button onclick="showTab('convert')">Conversion PDF vers Excel</button>
+    </div>
+
+    <div id="suivi" class="tab-content active">
+        <h2>Suivi Interactif</h2>
+        <div class="controls">
+            <input type="file" id="excelInput" accept=".xlsx" />
+            <button onclick="exportExcel()">Exporter les modifications</button>
+        </div>
+        <div id="table-container"></div>
+    </div>
+
+    <div id="convert" class="tab-content">
+        <h2>Convertisseur PDF</h2>
+        <input type="file" id="pdfInput" accept=".pdf" />
+        <button onclick="convertPDF()">Télécharger en Excel</button>
+    </div>
 
     <script>
-        document.getElementById('fileInput').addEventListener('change', function(e) {
-            const file = e.target.files[0];
+        function showTab(id) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+
+        // Gestion Suivi
+        document.getElementById('excelInput').addEventListener('change', function(e) {
             const reader = new FileReader();
             reader.onload = function(event) {
-                const wb = XLSX.read(new Uint8Array(event.target.result), {type: 'array'});
-                const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-                
+                const data = XLSX.utils.sheet_to_json(XLSX.read(new Uint8Array(event.target.result), {type: 'array'}).Sheets[0]);
                 new Tabulator("#table-container", {
                     data: data,
-                    autoColumns: true, // Crée les colonnes selon votre fichier Excel
+                    autoColumns: true,
                     layout: "fitColumns",
-                    editor: "input" // Permet de modifier chaque cellule
+                    columnDefaults: { editor: "input", bottomCalc: "sum" }
                 });
             };
-            reader.readAsArrayBuffer(file);
+            reader.readAsArrayBuffer(e.target.files[0]);
         });
+
+        function exportExcel() { /* Logique d'export */ }
+        function convertPDF() { alert("Traitement PDF lancé."); /* Logique de conversion */ }
     </script>
 </body>
 </html>
