@@ -2,63 +2,33 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Suivi & Calculs</title>
-    <!-- Bibliothèques -->
+    <title>Suivi Ventes Pro</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
-    <style>
-        body { font-family: sans-serif; padding: 20px; }
-        .controls { margin-bottom: 20px; padding: 15px; background: #e0e0e0; }
-        #table-container { margin-top: 10px; }
-    </style>
 </head>
 <body>
-
-    <h2>Centre de Suivi : Édition et Calculs</h2>
-    <div class="controls">
-        <input type="file" id="fileInput" accept=".xlsx,.csv,.pdf" />
-        <button onclick="exportExcel()">Exporter en Excel</button>
-    </div>
+    <h2>Interface de Suivi (Veuillez utiliser des fichiers .xlsx)</h2>
+    <input type="file" id="fileInput" accept=".xlsx" />
     <div id="table-container"></div>
 
     <script>
-        let table;
-
-        document.getElementById('fileInput').addEventListener('change', async function(e) {
+        document.getElementById('fileInput').addEventListener('change', function(e) {
             const file = e.target.files[0];
             const reader = new FileReader();
-
-            reader.onload = async function(event) {
-                let data = [];
-                if (file.name.endsWith('.pdf')) {
-                    alert("Lecture PDF : Un tableau simple sera généré.");
-                    data = [{ "Nom": "Donnée PDF", "Valeur": 0 }]; // Structure simplifiée
-                } else {
-                    const wb = XLSX.read(new Uint8Array(event.target.result), {type: 'array'});
-                    data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-                }
-
-                // Initialisation du tableau avec colonnes éditables et calculs
-                table = new Tabulator("#table-container", {
+            reader.onload = function(event) {
+                const wb = XLSX.read(new Uint8Array(event.target.result), {type: 'array'});
+                const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+                
+                new Tabulator("#table-container", {
                     data: data,
-                    autoColumns: true,
-                    autoColumnsDefinitions: { "editor": "input" },
+                    autoColumns: true, // Crée les colonnes selon votre fichier Excel
                     layout: "fitColumns",
-                    // Exemple de calcul : somme automatique en bas de colonne
-                    columnDefaults: { formatter: "money", bottomCalc: "sum" }
+                    editor: "input" // Permet de modifier chaque cellule
                 });
             };
             reader.readAsArrayBuffer(file);
         });
-
-        function exportExcel() {
-            const ws = XLSX.utils.json_to_sheet(table.getData());
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, "Suivi");
-            XLSX.writeFile(wb, "Suivi_Final.xlsx");
-        }
     </script>
 </body>
 </html>
