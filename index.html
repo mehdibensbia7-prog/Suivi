@@ -1,180 +1,63 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visualiseur Multi-Excel</title>
+    <title>Suivi & Calculs</title>
+    <!-- Bibliothèques -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-        .tab-bar {
-            border-bottom: 2px solid #333;
-            margin-bottom: 10px;
-        }
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            display: inline-block;
-            background: #eee;
-            margin-right: 5px;
-            border-radius: 4px 4px 0 0;
-        }
-        .tab.active {
-            background: #fff;
-            font-weight: bold;
-            border: 1px solid #333;
-            border-bottom: none;
-        }
-        .tab-content {
-            display: none;
-        }
-        .tab-content.active {
-            display: block;
-        }
-        table {
-            border-collapse: collapse;
-            width: 100%;
-            margin-top: 10px;
-        }
-        td, th {
-            border: 1px solid #ccc;
-            padding: 8px;
-            text-align: left;
-        }
-        th {
-            background-color: #f4f4f4;
-        }
-        #multiFileInput {
-            margin-bottom: 15px;
-        }
-        .info {
-            margin: 10px 0;
-            font-style: italic;
-            color: #666;
-        }
+        body { font-family: sans-serif; padding: 20px; }
+        .controls { margin-bottom: 20px; padding: 15px; background: #e0e0e0; }
+        #table-container { margin-top: 10px; }
     </style>
 </head>
 <body>
 
-    <h1>Visualiseur de fichiers Excel multiples</h1>
-    <p>Sélectionnez un ou plusieurs fichiers Excel (.xlsx, .xls) pour les visualiser dans des onglets.</p>
-    
-    <input type="file" id="multiFileInput" multiple accept=".xlsx,.xls" />
-    <div class="info">Chaque fichier sera affiché dans un onglet séparé en utilisant la première feuille.</div>
-    
-    <div id="tabs" class="tab-bar"></div>
-    <div id="contents"></div>
+    <h2>Centre de Suivi : Édition et Calculs</h2>
+    <div class="controls">
+        <input type="file" id="fileInput" accept=".xlsx,.csv,.pdf" />
+        <button onclick="exportExcel()">Exporter en Excel</button>
+    </div>
+    <div id="table-container"></div>
 
     <script>
-        const fileContents = {}; // Stocke les données des fichiers
+        let table;
 
-        document.getElementById('multiFileInput').addEventListener('change', function(e) {
-            const files = Array.from(e.target.files);
-            if (files.length === 0) return;
+        document.getElementById('fileInput').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
 
-            files.forEach(file => {
-                const reader = new FileReader();
-                reader.onload = function(event) {
-                    try {
-                        const wb = XLSX.read(new Uint8Array(event.target.result), {type: 'array'});
-                        const sheetName = file.name;
-                        
-                        // Utilise la première feuille
-                        const firstSheet = wb.Sheets[wb.SheetNames[0]];
-                        fileContents[sheetName] = XLSX.utils.sheet_to_json(firstSheet);
-                        
-                        createTab(sheetName);
-                    } catch (error) {
-                        console.error('Erreur lors de la lecture du fichier ' + file.name, error);
-                        alert('Erreur lors de la lecture du fichier ' + file.name + ': ' + error.message);
-                    }
-                };
-                reader.readAsArrayBuffer(file);
-            });
+            reader.onload = async function(event) {
+                let data = [];
+                if (file.name.endsWith('.pdf')) {
+                    alert("Lecture PDF : Un tableau simple sera généré.");
+                    data = [{ "Nom": "Donnée PDF", "Valeur": 0 }]; // Structure simplifiée
+                } else {
+                    const wb = XLSX.read(new Uint8Array(event.target.result), {type: 'array'});
+                    data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+                }
+
+                // Initialisation du tableau avec colonnes éditables et calculs
+                table = new Tabulator("#table-container", {
+                    data: data,
+                    autoColumns: true,
+                    autoColumnsDefinitions: { "editor": "input" },
+                    layout: "fitColumns",
+                    // Exemple de calcul : somme automatique en bas de colonne
+                    columnDefaults: { formatter: "money", bottomCalc: "sum" }
+                });
+            };
+            reader.readAsArrayBuffer(file);
         });
 
-        function createTab(name) {
-            const tabsDiv = document.getElementById('tabs');
-            const contentsDiv = document.getElementById('contents');
-            
-            // Vérifier si l'onglet existe déjà
-            if (document.querySelector(`.tab[data-name="${name}"]`)) {
-                return;
-            }
-            
-            // Créer l'onglet
-            const tab = document.createElement('div');
-            tab.className = 'tab';
-            tab.dataset.name = name;
-            tab.innerText = name.length > 30 ? name.substring(0, 27) + '...' : name;
-            tab.title = name;
-            tab.onclick = () => switchTab(name);
-            tabsDiv.appendChild(tab);
-
-            // Créer le conteneur de données
-            const content = document.createElement('div');
-            content.className = 'tab-content';
-            content.id = 'content-' + sanitizeId(name);
-            contentsDiv.appendChild(content);
-            
-            renderTable(name);
-            switchTab(name);
-        }
-
-        function sanitizeId(name) {
-            return name.replace(/[^a-zA-Z0-9]/g, '_');
-        }
-
-        function renderTable(name) {
-            const data = fileContents[name];
-            if (!data || data.length === 0) {
-                document.getElementById('content-' + sanitizeId(name)).innerHTML = '<p>Aucune donnée trouvée dans ce fichier.</p>';
-                return;
-            }
-
-            let html = '<table><thead><tr>';
-            Object.keys(data[0]).forEach(key => {
-                html += `<th>${escapeHtml(key)}</th>`;
-            });
-            html += '</tr></thead><tbody>';
-            
-            data.forEach(row => {
-                html += '<tr>';
-                Object.values(row).forEach(val => {
-                    html += `<td>${escapeHtml(val)}</td>`;
-                });
-                html += '</tr>';
-            });
-            
-            html += '</tbody></table>';
-            document.getElementById('content-' + sanitizeId(name)).innerHTML = html;
-        }
-
-        function escapeHtml(unsafe) {
-            if (unsafe == null) return '';
-            return String(unsafe)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
-
-        function switchTab(name) {
-            // Désactiver tous les onglets et contenus
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            
-            // Activer l'onglet et le contenu sélectionnés
-            const activeTab = Array.from(document.querySelectorAll('.tab')).find(t => t.dataset.name === name);
-            if (activeTab) activeTab.classList.add('active');
-            
-            const contentId = 'content-' + sanitizeId(name);
-            const activeContent = document.getElementById(contentId);
-            if (activeContent) activeContent.classList.add('active');
+        function exportExcel() {
+            const ws = XLSX.utils.json_to_sheet(table.getData());
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Suivi");
+            XLSX.writeFile(wb, "Suivi_Final.xlsx");
         }
     </script>
 </body>
