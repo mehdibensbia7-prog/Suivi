@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Centre d'Appel - Gestion Ventes</title>
-    <!-- Bibliothèques -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
@@ -12,29 +11,24 @@
         .nav { margin-bottom: 20px; }
         .tab-content { display: none; padding: 20px; background: #fff; border: 1px solid #ccc; }
         .active { display: block; }
-        .controls { margin-bottom: 15px; }
     </style>
 </head>
 <body>
 
     <div class="nav">
         <button onclick="showTab('suivi')">Suivi des Ventes</button>
-        <button onclick="showTab('convert')">Conversion PDF vers Excel</button>
+        <button onclick="showTab('convert')">Importer Fichier</button>
     </div>
 
     <div id="suivi" class="tab-content active">
-        <h2>Suivi Interactif</h2>
-        <div class="controls">
-            <input type="file" id="excelInput" accept=".xlsx" />
-            <button onclick="exportExcel()">Exporter les modifications</button>
-        </div>
+        <h2>Suivi des Ventes</h2>
         <div id="table-container"></div>
     </div>
 
     <div id="convert" class="tab-content">
-        <h2>Convertisseur PDF</h2>
-        <input type="file" id="pdfInput" accept=".pdf" />
-        <button onclick="convertPDF()">Télécharger en Excel</button>
+        <h2>Importer (Excel ou PDF)</h2>
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.pdf" />
+        <button onclick="processFile()">Charger dans Suivi</button>
     </div>
 
     <script>
@@ -43,23 +37,29 @@
             document.getElementById(id).classList.add('active');
         }
 
-        // Gestion Suivi
-        document.getElementById('excelInput').addEventListener('change', function(e) {
-            const reader = new FileReader();
-            reader.onload = function(event) {
-                const data = XLSX.utils.sheet_to_json(XLSX.read(new Uint8Array(event.target.result), {type: 'array'}).Sheets[0]);
-                new Tabulator("#table-container", {
-                    data: data,
-                    autoColumns: true,
-                    layout: "fitColumns",
-                    columnDefaults: { editor: "input", bottomCalc: "sum" }
-                });
-            };
-            reader.readAsArrayBuffer(e.target.files[0]);
-        });
+        function initTable(data) {
+            new Tabulator("#table-container", {
+                data: data,
+                autoColumns: true,
+                layout: "fitColumns",
+                columnDefaults: { editor: "input", bottomCalc: "sum" }
+            });
+            showTab('suivi');
+        }
 
-        function exportExcel() { /* Logique d'export */ }
-        function convertPDF() { alert("Traitement PDF lancé."); /* Logique de conversion */ }
+        function processFile() {
+            const file = document.getElementById('fileInput').files[0];
+            if (!file) return alert("Sélectionnez un fichier");
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                initTable(jsonData);
+            };
+            reader.readAsArrayBuffer(file);
+        }
     </script>
 </body>
 </html>
