@@ -2,75 +2,95 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Suivi Pro - MINT</title>
-    <!-- Bibliothèques -->
+    <title>Suivi MINT - Dashboard Pro</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
+    <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
     <style>
-        body { font-family: sans-serif; padding: 20px; background: #f4f4f9; }
-        .nav { margin-bottom: 20px; }
-        .tab-content { display: none; padding: 20px; background: #fff; border: 1px solid #ccc; }
-        .active { display: block; }
-        #table-container { margin-top: 20px; }
+        :root { --primary: #2c3e50; --accent: #3498db; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #ecf0f1; padding: 20px; }
+        .dashboard-header { background: var(--primary); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .controls { background: white; padding: 20px; border-radius: 10px; display: flex; gap: 15px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        button { background: var(--accent); color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; transition: 0.3s; }
+        button:hover { background: #2980b9; transform: translateY(-2px); }
+        #table-container { background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
 
-    <div class="nav">
-        <button onclick="showTab('suivi')">Onglet 1 : Suivi des Ventes</button>
-        <button onclick="showTab('import')">Onglet 2 : Importation</button>
+    <div class="dashboard-header">
+        <h1>Centre d'Appel MINT - Dashboard Ventes</h1>
     </div>
 
-    <div id="suivi" class="tab-content active">
-        <h2>Tableau de Bord de Suivi</h2>
-        <div id="table-container"></div>
-    </div>
-
-    <div id="import" class="tab-content">
-        <h2>Charger fichier Excel (.xlsx)</h2>
+    <div class="controls">
         <input type="file" id="fileInput" accept=".xlsx" />
-        <button onclick="processFile()">Afficher dans Suivi</button>
+        <select id="sheetSelector" onchange="loadSheet()">
+            <option value="">-- Choisir une feuille --</option>
+        </select>
+        <button onclick="saveModifications()">💾 Sauvegarder</button>
+        <input type="text" id="filter-field" placeholder="Rechercher (Agent, Contrat...)" />
+        <button onclick="applyFilter()">🔍 Filtrer</button>
+        <button onclick="clearFilter()" style="background: #95a5a6;">X</button>
     </div>
+
+    <div id="table-container"></div>
 
     <script>
-        function showTab(id) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.getElementById(id).classList.add('active');
+        let workbook = null;
+        let table = null;
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                workbook = XLSX.read(new Uint8Array(event.target.result), {type: 'array'});
+                const selector = document.getElementById('sheetSelector');
+                selector.innerHTML = '<option value="">-- Choisir une feuille --</option>';
+                workbook.SheetNames.forEach(name => {
+                    let opt = document.createElement('option');
+                    opt.value = name; opt.innerHTML = name;
+                    selector.appendChild(opt);
+                });
+            };
+            reader.readAsArrayBuffer(e.target.files[0]);
+        });
+
+        function loadSheet() {
+            const sheetName = document.getElementById('sheetSelector').value;
+            if (!sheetName) return;
+
+            let jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]).map(row => {
+                let clean = {};
+                for(let key in row) if(!key.startsWith("Unnamed")) clean[key] = row[key];
+                return clean;
+            });
+
+            table = new Tabulator("#table-container", {
+                data: jsonData,
+                autoColumns: true,
+                layout: "fitColumns",
+                pagination: "local",
+                paginationSize: 15,
+                columnDefaults: { editor: "input", bottomCalc: "sum" }
+            });
         }
 
-        function processFile() {
-            const file = document.getElementById('fileInput').files[0];
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, {type: 'array'});
-                const sheet = workbook.Sheets[workbook.SheetNames[0]];
-                
-                // Conversion en JSON
-                let jsonData = XLSX.utils.sheet_to_json(sheet);
-                
-                // Nettoyage : supprimer les colonnes "Unnamed"
-                jsonData = jsonData.map(row => {
-                    const cleanRow = {};
-                    Object.keys(row).forEach(key => {
-                        if (!key.startsWith("Unnamed")) {
-                            cleanRow[key] = row[key];
-                        }
-                    });
-                    return cleanRow;
-                });
+        function applyFilter() {
+            const val = document.getElementById("filter-field").value;
+            table.setFilter(function(data) {
+                return Object.values(data).some(v => String(v).toLowerCase().includes(val.toLowerCase()));
+            });
+        }
 
-                // Affichage
-                new Tabulator("#table-container", {
-                    data: jsonData,
-                    autoColumns: true,
-                    layout: "fitColumns",
-                    editor: "input"
-                });
-                showTab('suivi');
-            };
-            reader.readAsArrayBuffer(file);
+        function clearFilter() {
+            document.getElementById("filter-field").value = "";
+            table.clearFilter();
+        }
+
+        function saveModifications() {
+            const ws = XLSX.utils.json_to_sheet(table.getData());
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Feuille_Export");
+            XLSX.writeFile(wb, "Suivi_MINT_Update.xlsx");
         }
     </script>
 </body>
