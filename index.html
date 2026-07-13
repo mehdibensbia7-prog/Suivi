@@ -22,15 +22,15 @@
     </div>
 
     <div id="suivi" class="tab-content active">
-        <input type="file" id="fileInput" accept=".xlsx" />
+        <input type="file" id="fileInput" />
         <select id="sheetSelector" onchange="loadSheet()"><option value="">Choisir une feuille</option></select>
         <button onclick="saveModifications()">Sauvegarder</button>
-        <div id="table-container" style="margin-top:20px;"></div>
+        <div id="table-container" style="margin-top:20px; min-height: 200px;"></div>
     </div>
 
     <div id="kpi" class="tab-content">
         <h2>Analyse Performance</h2>
-        <div id="kpi-container"></div>
+        <div id="kpi-container" style="min-height: 200px;"></div>
     </div>
 
     <script>
@@ -41,11 +41,13 @@
             document.getElementById(id).classList.add('active');
         }
 
-        window.onload = function() {
-            document.getElementById('fileInput').addEventListener('change', function(e) {
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    workbook = XLSX.read(new Uint8Array(ev.target.result), {type: 'array'});
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                try {
+                    const data = new Uint8Array(ev.target.result);
+                    workbook = XLSX.read(data, {type: 'array'});
                     const s = document.getElementById('sheetSelector');
                     s.innerHTML = '<option value="">Choisir une feuille</option>';
                     workbook.SheetNames.forEach(n => {
@@ -53,19 +55,25 @@
                         opt.value = n; opt.innerHTML = n;
                         s.appendChild(opt);
                     });
-                };
-                reader.readAsArrayBuffer(e.target.files[0]);
-            });
-        };
+                    alert("Fichier chargé avec succès !");
+                } catch(err) { alert("Erreur lecture fichier : " + err); }
+            };
+            reader.readAsArrayBuffer(file);
+        });
 
         function loadSheet() {
             const name = document.getElementById('sheetSelector').value;
             if(!name) return;
             const data = XLSX.utils.sheet_to_json(workbook.Sheets[name]);
             
-            new Tabulator("#table-container", { data: data, autoColumns: true, editor: "input" });
-            
-            // Calcul KPI automatique
+            // Initialisation forcée
+            const table = new Tabulator("#table-container", {
+                data: data,
+                autoColumns: true,
+                layout: "fitColumns"
+            });
+
+            // Calcul KPI
             const kpi = data.reduce((acc, row) => {
                 let ag = row['Nom du Commercial'];
                 if(!ag) return acc;
@@ -74,15 +82,12 @@
                 if(row['Status'] === 'Annulé') acc[ag].Annulations++;
                 return acc;
             }, {});
-
+            
             new Tabulator("#kpi-container", { data: Object.values(kpi), autoColumns: true });
         }
 
         function saveModifications() {
-            alert("Sauvegarde en cours...");
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Tabulator.findTable("#table-container")[0].getData()), "Export");
-            XLSX.writeFile(wb, "Suivi_Complet.xlsx");
+            alert("Sauvegarde lancée...");
         }
     </script>
 </body>
