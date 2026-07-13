@@ -30,6 +30,7 @@
   .btn.warn{border-color:var(--amber);color:var(--amber);}
   #status-msg{font-family:var(--mono);font-size:12px;color:var(--ink-dim);}
   #status-msg.error{color:var(--red);}
+  #status-msg.warn{color:var(--amber);}
   #status-msg.ok{color:var(--mint);}
   .nav{display:flex;gap:6px;padding:14px 28px 0;border-bottom:1px solid var(--line);background:var(--bg);}
   .nav button{background:transparent;border:none;color:var(--ink-dim);padding:10px 16px;font-size:13px;font-weight:600;border-bottom:2px solid transparent;cursor:pointer;}
@@ -61,6 +62,24 @@
   .tag.ok{background:#0d3327;color:var(--mint);}
   .tag.warn{background:#3a2a10;color:var(--amber);}
   .tag.bad{background:#3a1520;color:var(--red);}
+  .cal-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
+  .cal-month-label{font-family:var(--mono);font-size:14px;font-weight:700;min-width:160px;text-align:center;}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;}
+  .cal-dow{font-family:var(--mono);font-size:11px;color:var(--ink-dim);text-align:center;padding:4px 0;text-transform:uppercase;}
+  .cal-cell{background:var(--panel2);border:1px solid var(--line);border-radius:8px;min-height:64px;padding:6px;position:relative;}
+  .cal-cell.empty{background:transparent;border-color:transparent;}
+  .cal-cell .cal-daynum{font-size:11px;color:var(--ink-dim);}
+  .cal-cell.friday{cursor:pointer;transition:transform .1s;}
+  .cal-cell.friday:hover{transform:translateY(-1px);border-color:var(--mint);}
+  .cal-cell.friday.due{border-color:var(--red);}
+  .cal-cell.friday.paid{border-color:var(--mint);}
+  .cal-cell.friday.selected{outline:2px solid var(--blue);}
+  .cal-amount{font-family:var(--mono);font-size:12px;font-weight:700;margin-top:6px;}
+  .cal-amount.due{color:var(--red);}
+  .cal-amount.paid{color:var(--mint);}
+  .cal-amount.none{color:var(--ink-dim);font-weight:400;}
+  .cal-decom-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red);vertical-align:middle;}
+  .cal-cell .cal-decom-badge{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:var(--red);}
 </style>
 </head>
 <body>
@@ -84,6 +103,7 @@
 <div class="nav">
   <button class="navbtn active" data-tab="suivi">Suivi Opérationnel</button>
   <button class="navbtn" data-tab="finance">Trésorerie & Commissions</button>
+  <button class="navbtn" data-tab="calendrier">Calendrier de Paie</button>
   <button class="navbtn" data-tab="kpi">KPI Agents</button>
   <button class="navbtn" data-tab="alertes">Alertes & Compliance</button>
 </div>
@@ -102,11 +122,16 @@
   <div class="tab" id="tab-finance">
     <div class="summary-grid" id="finance-summary"></div>
     <div class="panel">
-      <h2>Détail par contrat <span class="sub">— éditez « Statut Paiement » et « Décommissionné (manuel) » directement dans le tableau</span></h2>
+      <h2>Échéancier de paie — Brut MINT <span class="sub">chaque vendredi qui suit la date de vente ; cliquez le vendredi dans le filtre ci-dessous pour isoler les lignes à régler</span></h2>
+      <div id="table-payroll"></div>
+    </div>
+    <div class="panel">
+      <h2>Détail par contrat <span class="sub">— éditez « Statut Brut », « Statut Activation » et « Décommissionné » directement dans le tableau. Marquer « Payé » avant le vendredi de paie officiel = avance, automatiquement signalée.</span></h2>
       <div class="filters">
         <select id="filterAgent"><option value="">Tous les agents</option></select>
         <select id="filterType"><option value="">MINT + ConsoPilote</option><option value="MINT">MINT seul</option><option value="CONSO">ConsoPilote seul</option></select>
-        <select id="filterStatutPaie"><option value="">Tous statuts paiement</option><option value="Payé">Payé</option><option value="Non Payé">Non Payé</option></select>
+        <select id="filterVendredi"><option value="">Tous les vendredis</option></select>
+        <select id="filterStatutPaie"><option value="">Tous statuts Brut</option><option value="Payé">Brut Payé</option><option value="Non Payé">Brut Non Payé</option></select>
       </div>
       <div id="table-finance"></div>
     </div>
@@ -116,6 +141,36 @@
     <div class="panel">
       <h2>Performance par agent</h2>
       <div id="table-kpi"></div>
+    </div>
+  </div>
+
+  <div class="tab" id="tab-calendrier">
+    <div class="panel">
+      <h2>Calendrier de paie <span class="sub">— les vendredis en couleur portent une vente MINT à régler. Cliquez un vendredi pour voir le détail par agent.</span></h2>
+      <div class="cal-toolbar">
+        <button class="btn" id="calPrev">‹ Mois précédent</button>
+        <button class="btn" id="calNext">Mois suivant ›</button>
+        <span style="width:1px;height:20px;background:var(--line);"></span>
+        <button class="btn" id="calWeekPrev">‹ Vendredi précédent</button>
+        <span id="calMonthLabel" class="cal-month-label"></span>
+        <button class="btn" id="calWeekNext">Vendredi suivant ›</button>
+        <span style="width:1px;height:20px;background:var(--line);"></span>
+        <button class="btn" id="calToday">Aujourd'hui</button>
+      </div>
+      <div id="calendar-grid" class="cal-grid"></div>
+      <div class="legend">
+        <span class="tag bad">rouge</span> = brut restant à payer &nbsp;
+        <span class="tag ok">vert</span> = tout payé pour ce vendredi &nbsp;
+        <span class="cal-decom-dot"></span> = décommissions survenues cette semaine
+      </div>
+    </div>
+    <div class="panel" id="calDetailPanel" style="display:none;">
+      <h2 id="calDetailTitle">Détail du vendredi</h2>
+      <div class="filters">
+        <button class="btn primary" id="calMarkAllPaid">Marquer tout « Payé » pour ce vendredi</button>
+        <button class="btn warn" id="calMarkAllUnpaid">Réinitialiser « Non Payé »</button>
+      </div>
+      <div id="table-cal-detail"></div>
     </div>
   </div>
 
@@ -146,6 +201,7 @@ document.querySelectorAll('.navbtn').forEach(b=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
     b.classList.add('active');
     document.getElementById('tab-'+b.dataset.tab).classList.add('active');
+    if(b.dataset.tab==='calendrier' && rawLignes.length) renderCalendar();
   });
 });
 function setStatus(msg, kind){
@@ -307,6 +363,28 @@ function monthsBetween(d1, d2){
   return (d2.getFullYear()-d1.getFullYear())*12 + (d2.getMonth()-d1.getMonth()) - (d2.getDate()<d1.getDate()?1:0);
 }
 function fmtDate(d){ return d ? d.toLocaleDateString('fr-FR') : ''; }
+function nextFriday(d){
+  if(!d) return null;
+  const day = d.getDay(); // 0=Dim ... 5=Ven ... 6=Sam
+  const diff = (5 - day + 7) % 7;
+  const res = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
+  return res;
+}
+// une avance = le brut a été réglé avant son vendredi de paie officiel
+function isAvance(l){
+  if(l.type!=='MINT' || l.statutPaiementBrut!=='Payé' || !l.datePaiementBrut || !l.vendrediPaiement) return false;
+  const paye = parseDate(l.datePaiementBrut);
+  if(!paye) return false;
+  return paye.getTime() < l.vendrediPaiement.getTime();
+}
+// applique une édition (statut paiement / décommission) à la fois sur overrides et sur la ligne affichée
+function setOverride(id, key, value){
+  overrides[id] = overrides[id] || {};
+  overrides[id][key] = value;
+  const line = rawLignes.find(l=>l.id===id);
+  if(line) line[key] = value;
+  return line;
+}
 
 /* ============================= MOTEUR DE CALCUL ============================= */
 function buildLignes(bodyA, cA, refMap, hasCRM){
@@ -348,15 +426,19 @@ function buildLignes(bodyA, cA, refMap, hasCRM){
       const decommissionne = autoClawback || decommissionManuel;
 
       const net = decommissionne ? 0 : (brut + activation);
+      const vendrediPaiement = nextFriday(dateVente);
 
       rawLignes.push({
         id: lineId, type:'MINT', agent, dateVente, dateVenteStr: fmtDate(dateVente),
+        vendrediPaiement, vendrediPaiementStr: fmtDate(vendrediPaiement),
         contrat: ref, client, produit,
         statutCRM: found ? (etatRaw||'—') : 'Introuvable (CRM)',
         brut, activation, net,
         decommissionAuto: autoClawback, decommissionManuel,
         decommissionne,
-        statutPaiement: manualOverride.statutPaiement || 'Non Payé',
+        statutPaiementBrut: manualOverride.statutPaiementBrut || 'Non Payé',
+        statutPaiementActivation: manualOverride.statutPaiementActivation || 'Non Payé',
+        datePaiementBrut: manualOverride.datePaiementBrut || null,
         pending: isPending,
         moisEcoules
       });
@@ -395,6 +477,7 @@ function renderAll(){
   renderKPI();
   renderAlertes();
   populateAgentFilter();
+  renderCalendar();
 }
 
 function renderSuivi(){
@@ -421,20 +504,24 @@ function renderSuivi(){
 }
 
 function renderFinance(){
-  const rows = document.getElementById('table-finance');
   const data = rawLignes.map(l=>{
     if(l.type==='MINT'){
       return {
-        id:l.id, Type:'MINT', Agent:l.agent, Date:l.dateVenteStr, Contrat:l.contrat,
-        Brut:l.brut, Activation:l.activation, Decommissionne:l.decommissionne,
-        Decom_manuel:l.decommissionManuel, Net:l.net, Statut_Paiement:l.statutPaiement,
-        _statutCRM:l.statutCRM
+        id:l.id, Type:'MINT', Agent:l.agent, Date:l.dateVenteStr, Vendredi:l.vendrediPaiementStr,
+        Contrat:l.contrat,
+        Brut:l.brut, Statut_Brut: l.decommissionne ? '—' : l.statutPaiementBrut,
+        Date_Paiement: l.decommissionne ? '' : (l.datePaiementBrut||''),
+        Avance: isAvance(l),
+        Activation:l.activation, Statut_Activation: (l.activation===0 || l.decommissionne) ? '—' : l.statutPaiementActivation,
+        Decom_manuel:l.decommissionManuel, Net:l.net
       };
     }
     return {
-      id:l.id, Type:'CONSO', Agent:l.agent, Date:l.dateVenteStr, Contrat:l.contrat,
-      Brut:l.signature, Activation:l.m1+l.m2, Decommissionne:false, Decom_manuel:false,
-      Net:l.net, Statut_Paiement:l.statutPaiement, _statutCRM:''
+      id:l.id, Type:'CONSO', Agent:l.agent, Date:l.dateVenteStr, Vendredi:'—',
+      Contrat:l.contrat,
+      Brut:l.signature, Statut_Brut:l.statutPaiement, Date_Paiement:'', Avance:false,
+      Activation:l.m1+l.m2, Statut_Activation:'—',
+      Decom_manuel:false, Net:l.net
     };
   });
 
@@ -442,51 +529,105 @@ function renderFinance(){
   tFinance = new Tabulator("#table-finance", {
     data, layout:"fitColumns", height:"460px", placeholder:"Aucune donnée.",
     columns:[
-      {title:"Type", field:"Type", width:80, formatter:c=>`<span class="tag ${c.getValue()==='MINT'?'ok':'warn'}">${c.getValue()}</span>`},
+      {title:"Type", field:"Type", width:70, formatter:c=>`<span class="tag ${c.getValue()==='MINT'?'ok':'warn'}">${c.getValue()}</span>`},
       {title:"Agent", field:"Agent", widthGrow:2},
-      {title:"Date vente", field:"Date", width:100},
-      {title:"Contrat", field:"Contrat", width:110},
-      {title:"Brut/Signature (DH)", field:"Brut", width:140, hozAlign:"right"},
-      {title:"Activation/M+1+M+2 (DH)", field:"Activation", width:170, hozAlign:"right"},
-      {title:"Décommissionné", field:"Decom_manuel", width:130, formatter:"tickCross", editor:"tickCross",
+      {title:"Date vente", field:"Date", width:95},
+      {title:"Vendredi de paie", field:"Vendredi", width:110},
+      {title:"Contrat", field:"Contrat", width:100},
+      {title:"Brut (DH)", field:"Brut", width:80, hozAlign:"right"},
+      {title:"Statut Brut", field:"Statut_Brut", width:120,
+        editor:"list", editable:cell=>cell.getValue()!=='—',
+        editorParams:{values:["Non Payé","Payé"]},
+        formatter:c=>{
+          const v=c.getValue();
+          if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
+          return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
+        },
         cellEdited:cell=>{
           const r = cell.getRow().getData();
-          overrides[r.id] = overrides[r.id]||{};
-          overrides[r.id].decommissionManuel = cell.getValue();
+          if(cell.getValue()==='—') return;
+          const key = r.Type==='MINT' ? 'statutPaiementBrut' : 'statutPaiement';
+          setOverride(r.id, key, cell.getValue());
+          if(r.Type==='MINT'){
+            // à chaque passage "Payé" on horodate au jour du jour ; repasser "Non Payé" efface la date
+            if(cell.getValue()==='Payé') setOverride(r.id, 'datePaiementBrut', fmtDate(new Date()));
+            else setOverride(r.id, 'datePaiementBrut', null);
+          }
+          renderFinanceSummary(); renderKPI(); renderPayroll(); renderCalendar();
+        }
+      },
+      {title:"Payé le", field:"Date_Paiement", width:150,
+        editor:"input", editable:cell=>cell.getData().Statut_Brut==='Payé',
+        formatter:c=>{
+          const r=c.getRow().getData();
+          if(!c.getValue()) return '<span style="color:var(--ink-dim)">—</span>';
+          return r.Avance ? `${c.getValue()} <span class="tag warn">Avance</span>` : c.getValue();
+        },
+        cellEdited:cell=>{
+          const r = cell.getRow().getData();
+          const d = parseDate(cell.getValue());
+          if(!d){ showError('Date invalide — utilisez le format JJ/MM/AAAA.'); return; }
+          setOverride(r.id, 'datePaiementBrut', fmtDate(d));
+          renderFinance();
+        }
+      },
+      {title:"Activation (DH)", field:"Activation", width:100, hozAlign:"right"},
+      {title:"Statut Activation", field:"Statut_Activation", width:130,
+        editor:"list", editable:cell=>cell.getValue()!=='—',
+        editorParams:{values:["Non Payé","Payé"]},
+        formatter:c=>{
+          const v=c.getValue();
+          if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
+          return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
+        },
+        cellEdited:cell=>{
+          const r = cell.getRow().getData();
+          if(cell.getValue()==='—') return;
+          setOverride(r.id, 'statutPaiementActivation', cell.getValue());
+          renderFinanceSummary(); renderKPI();
+        }
+      },
+      {title:"Décommissionné", field:"Decom_manuel", width:120, formatter:"tickCross", editor:"tickCross",
+        cellEdited:cell=>{
+          const r = cell.getRow().getData();
+          setOverride(r.id, 'decommissionManuel', cell.getValue());
           recomputeAndRerender();
         }
       },
-      {title:"Net (DH)", field:"Net", width:100, hozAlign:"right",
-        formatter:c=>`<b style="color:${c.getValue()>0?'#3fd6a4':'#8ea0bd'}">${c.getValue()} DH</b>`},
-      {title:"Statut paiement", field:"Statut_Paiement", width:140, editor:"list",
-        editorParams:{values:["Non Payé","Payé"]},
-        formatter:c=>`<span class="tag ${c.getValue()==='Payé'?'ok':'bad'}">${c.getValue()}</span>`,
-        cellEdited:cell=>{
-          const r = cell.getRow().getData();
-          overrides[r.id] = overrides[r.id]||{};
-          overrides[r.id].statutPaiement = cell.getValue();
-          renderFinanceSummary();
-          renderKPI();
-        }
-      }
+      {title:"Net (DH)", field:"Net", width:90, hozAlign:"right",
+        formatter:c=>`<b style="color:${c.getValue()>0?'#3fd6a4':'#8ea0bd'}">${c.getValue()} DH</b>`}
     ]
   });
 
   document.getElementById('filterAgent').onchange =
   document.getElementById('filterType').onchange =
+  document.getElementById('filterVendredi').onchange =
   document.getElementById('filterStatutPaie').onchange = applyFinanceFilters;
 
+  populateVendrediFilter();
   renderFinanceSummary();
+  renderPayroll();
+}
+
+function populateVendrediFilter(){
+  const vendredis = [...new Set(rawLignes.filter(l=>l.type==='MINT').map(l=>l.vendrediPaiementStr))]
+    .sort((a,b)=> a.split('/').reverse().join('').localeCompare(b.split('/').reverse().join('')));
+  const sel = document.getElementById('filterVendredi');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Tous les vendredis</option>' + vendredis.map(v=>`<option value="${v}">${v}</option>`).join('');
+  sel.value = current;
 }
 
 function applyFinanceFilters(){
   const agent = document.getElementById('filterAgent').value;
   const type = document.getElementById('filterType').value;
+  const vendredi = document.getElementById('filterVendredi').value;
   const statut = document.getElementById('filterStatutPaie').value;
   tFinance.clearFilter();
   if(agent) tFinance.addFilter("Agent","=",agent);
   if(type) tFinance.addFilter("Type","=",type);
-  if(statut) tFinance.addFilter("Statut_Paiement","=",statut);
+  if(vendredi) tFinance.addFilter("Vendredi","=",vendredi);
+  if(statut) tFinance.addFilter("Statut_Brut","=",statut);
 }
 
 function recomputeAndRerender(){
@@ -503,26 +644,73 @@ function recomputeAndRerender(){
   renderAlertes();
 }
 
+function renderPayroll(){
+  const byVendredi = {};
+  rawLignes.filter(l=>l.type==='MINT' && !l.decommissionne).forEach(l=>{
+    const key = l.vendrediPaiementStr || '—';
+    if(!byVendredi[key]) byVendredi[key] = {Vendredi:key, Contrats:0, Brut_a_payer:0, Brut_paye:0};
+    byVendredi[key].Contrats++;
+    if(l.statutPaiementBrut==='Payé') byVendredi[key].Brut_paye += l.brut;
+    else byVendredi[key].Brut_a_payer += l.brut;
+  });
+  const data = Object.values(byVendredi).sort((a,b)=>{
+    const [da,ma,ya]=a.Vendredi.split('/'); const [db,mb,yb]=b.Vendredi.split('/');
+    return new Date(ya,ma-1,da) - new Date(yb,mb-1,db);
+  });
+  const today = fmtDate(nextFriday(new Date()));
+
+  const tbl = document.getElementById('table-payroll');
+  if(window.tPayroll) window.tPayroll.destroy();
+  window.tPayroll = new Tabulator(tbl, {
+    data, layout:"fitColumns", height:data.length?Math.min(60+data.length*36,320)+"px":"80px",
+    placeholder:"Aucune échéance — importez un fichier.",
+    columns:[
+      {title:"Vendredi de paie", field:"Vendredi", widthGrow:1, formatter:c=>{
+        const v=c.getValue();
+        return v===today ? `<b style="color:var(--amber)">${v} — prochain</b>` : v;
+      }},
+      {title:"Contrats MINT", field:"Contrats", hozAlign:"center", width:120},
+      {title:"Brut à payer (DH)", field:"Brut_a_payer", hozAlign:"right", width:150,
+        formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Brut déjà payé (DH)", field:"Brut_paye", hozAlign:"right", width:150}
+    ]
+  });
+}
+
 function renderFinanceSummary(){
   const box = document.getElementById('finance-summary');
-  let mintBrutDu=0, mintPaye=0, consoDu=0, consoPaye=0, decom=0, totalGeneral=0;
+  let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0, avances=0;
+  const prochainVendredi = fmtDate(nextFriday(new Date()));
+  let brutVendrediProchain = 0;
+
   rawLignes.forEach(l=>{
-    const paye = l.statutPaiement==='Payé';
     if(l.type==='MINT'){
-      if(l.decommissionne) decom += (l.brut+l.activation);
-      else { if(paye) mintPaye+=l.net; else mintBrutDu+=l.net; totalGeneral+=l.net; }
+      if(l.decommissionne){ decom += (l.brut+l.activation); return; }
+      if(l.statutPaiementBrut==='Payé'){
+        brutPaye += l.brut;
+        if(isAvance(l)) avances += l.brut;
+      } else {
+        brutDu += l.brut;
+        if(l.vendrediPaiementStr===prochainVendredi) brutVendrediProchain += l.brut;
+      }
+      if(l.activation>0){
+        if(l.statutPaiementActivation==='Payé') activPaye += l.activation; else activDu += l.activation;
+      }
     } else {
-      if(paye) consoPaye+=l.net; else consoDu+=l.net;
-      totalGeneral+=l.net;
+      if(l.statutPaiement==='Payé') consoPaye += l.net; else consoDu += l.net;
     }
   });
+
   box.innerHTML = `
-    <div class="stat-card mint"><div class="label">MINT à payer</div><div class="value">${mintBrutDu} DH</div></div>
-    <div class="stat-card blue"><div class="label">MINT payé</div><div class="value">${mintPaye} DH</div></div>
+    <div class="stat-card red"><div class="label">Brut MINT — vendredi ${prochainVendredi}</div><div class="value">${brutVendrediProchain} DH</div></div>
+    <div class="stat-card mint"><div class="label">Brut MINT à payer (total)</div><div class="value">${brutDu} DH</div></div>
+    <div class="stat-card blue"><div class="label">Brut MINT payé</div><div class="value">${brutPaye} DH</div></div>
+    <div class="stat-card amber"><div class="label">dont Avances (payé avant échéance)</div><div class="value">${avances} DH</div></div>
+    <div class="stat-card amber"><div class="label">Activation MINT à payer</div><div class="value">${activDu} DH</div></div>
+    <div class="stat-card blue"><div class="label">Activation MINT payée</div><div class="value">${activPaye} DH</div></div>
     <div class="stat-card amber"><div class="label">CONSO à payer</div><div class="value">${consoDu} DH</div></div>
     <div class="stat-card blue"><div class="label">CONSO payé</div><div class="value">${consoPaye} DH</div></div>
     <div class="stat-card red"><div class="label">Décommissionné (clawback)</div><div class="value">${decom} DH</div></div>
-    <div class="stat-card"><div class="label">Masse commissionnable totale</div><div class="value">${totalGeneral} DH</div></div>
   `;
 }
 
@@ -585,6 +773,136 @@ function populateAgentFilter(){
   sel.innerHTML = '<option value="">Tous les agents</option>' + agents.map(a=>`<option value="${a}">${a}</option>`).join('');
 }
 
+/* ============================= CALENDRIER DE PAIE ============================= */
+let calRefDate = new Date();
+let calSelected = null; // "DD/MM/YYYY" string du vendredi sélectionné
+
+document.getElementById('calPrev').addEventListener('click', ()=>{ calRefDate = new Date(calRefDate.getFullYear(), calRefDate.getMonth()-1, 1); renderCalendar(); });
+document.getElementById('calNext').addEventListener('click', ()=>{ calRefDate = new Date(calRefDate.getFullYear(), calRefDate.getMonth()+1, 1); renderCalendar(); });
+document.getElementById('calToday').addEventListener('click', ()=>{ calRefDate = new Date(); calSelected = null; renderCalendar(); });
+document.getElementById('calWeekPrev').addEventListener('click', ()=> jumpWeek(-7));
+document.getElementById('calWeekNext').addEventListener('click', ()=> jumpWeek(7));
+
+function jumpWeek(deltaDays){
+  // ancre sur le vendredi actuellement sélectionné (ou le prochain vendredi si rien n'est sélectionné), puis saute d'une semaine pile
+  let anchor = calSelected ? parseDate(calSelected) : nextFriday(new Date());
+  anchor = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + deltaDays);
+  calRefDate = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  selectFriday(fmtDate(anchor));
+}
+
+// agrège toutes les lignes MINT non décommissionnées par vendredi de paie
+function buildCalendarStats(){
+  const byDay = {}; // key "DD/MM/YYYY" -> {brutDu, brutPaye, decomCount, byAgent:{}}
+  rawLignes.forEach(l=>{
+    if(l.type!=='MINT' || !l.vendrediPaiement) return;
+    const key = l.vendrediPaiementStr;
+    if(!byDay[key]) byDay[key] = {brutDu:0, brutPaye:0, decomCount:0, byAgent:{}};
+    const day = byDay[key];
+    if(l.decommissionne){ day.decomCount++; return; }
+    if(!day.byAgent[l.agent]) day.byAgent[l.agent] = {du:0, paye:0};
+    if(l.statutPaiementBrut==='Payé'){ day.brutPaye += l.brut; day.byAgent[l.agent].paye += l.brut; }
+    else { day.brutDu += l.brut; day.byAgent[l.agent].du += l.brut; }
+  });
+  return byDay;
+}
+
+function renderCalendar(){
+  if(!rawLignes.length) return;
+  const stats = buildCalendarStats();
+  const y = calRefDate.getFullYear(), m = calRefDate.getMonth();
+  document.getElementById('calMonthLabel').textContent =
+    calRefDate.toLocaleDateString('fr-FR', {month:'long', year:'numeric'}).replace(/^./,c=>c.toUpperCase());
+
+  const grid = document.getElementById('calendar-grid');
+  grid.innerHTML = '';
+  ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].forEach(d=>{
+    const el = document.createElement('div'); el.className='cal-dow'; el.textContent=d; grid.appendChild(el);
+  });
+
+  const firstOfMonth = new Date(y, m, 1);
+  const startOffset = (firstOfMonth.getDay()+6)%7; // lundi=0
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+
+  for(let i=0;i<startOffset;i++){ const e=document.createElement('div'); e.className='cal-cell empty'; grid.appendChild(e); }
+
+  for(let d=1; d<=daysInMonth; d++){
+    const date = new Date(y, m, d);
+    const isFriday = date.getDay()===5;
+    const dateStr = fmtDate(date);
+    const cell = document.createElement('div');
+    cell.className = 'cal-cell' + (isFriday ? ' friday' : '');
+    let inner = `<div class="cal-daynum">${d}</div>`;
+
+    if(isFriday){
+      const s = stats[dateStr];
+      if(s && (s.brutDu>0 || s.brutPaye>0)){
+        cell.classList.add(s.brutDu>0 ? 'due' : 'paid');
+        inner += `<div class="cal-amount ${s.brutDu>0?'due':'paid'}">${s.brutDu>0 ? s.brutDu+' DH dû' : 'Tout payé'}</div>`;
+      } else {
+        inner += `<div class="cal-amount none">—</div>`;
+      }
+      if(s && s.decomCount>0) inner += `<div class="cal-decom-badge" title="${s.decomCount} décommission(s)"></div>`;
+      if(dateStr===calSelected) cell.classList.add('selected');
+      cell.addEventListener('click', ()=> selectFriday(dateStr));
+    }
+    cell.innerHTML = inner;
+    grid.appendChild(cell);
+  }
+
+  if(calSelected) renderCalendarDetail(calSelected);
+}
+
+function selectFriday(dateStr){
+  calSelected = dateStr;
+  renderCalendar();
+  renderCalendarDetail(dateStr);
+}
+
+function renderCalendarDetail(dateStr){
+  const panel = document.getElementById('calDetailPanel');
+  const stats = buildCalendarStats()[dateStr];
+  panel.style.display = 'block';
+  document.getElementById('calDetailTitle').innerHTML = `Détail du vendredi <span style="color:var(--mint)">${dateStr}</span>`;
+
+  const data = stats ? Object.entries(stats.byAgent).map(([agent,v])=>({
+    Agent: agent, Brut_du: v.du, Brut_paye: v.paye, Total: v.du+v.paye
+  })).sort((a,b)=>b.Total-a.Total) : [];
+  const totalDu = data.reduce((s,r)=>s+r.Brut_du,0);
+  const totalPaye = data.reduce((s,r)=>s+r.Brut_paye,0);
+  data.push({Agent:'— TOTAL GLOBAL —', Brut_du:totalDu, Brut_paye:totalPaye, Total:totalDu+totalPaye});
+
+  if(window.tCalDetail) window.tCalDetail.destroy();
+  window.tCalDetail = new Tabulator("#table-cal-detail", {
+    data, layout:"fitColumns", height:Math.min(60+data.length*38,360)+"px",
+    columns:[
+      {title:"Agent", field:"Agent", widthGrow:2, formatter:c=> c.getValue().startsWith('—') ? `<b>${c.getValue()}</b>` : c.getValue()},
+      {title:"Brut dû (DH)", field:"Brut_du", hozAlign:"right", formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Brut payé (DH)", field:"Brut_paye", hozAlign:"right", formatter:c=>`<span style="color:#3fd6a4">${c.getValue()} DH</span>`}
+    ]
+  });
+
+  document.getElementById('calMarkAllPaid').onclick = ()=> bulkSetFriday(dateStr, 'Payé');
+  document.getElementById('calMarkAllUnpaid').onclick = ()=> bulkSetFriday(dateStr, 'Non Payé');
+}
+
+function bulkSetFriday(dateStr, value){
+  rawLignes.forEach(l=>{
+    if(l.type==='MINT' && l.vendrediPaiementStr===dateStr && !l.decommissionne){
+      setOverride(l.id, 'statutPaiementBrut', value);
+      setOverride(l.id, 'datePaiementBrut', value==='Payé' ? fmtDate(new Date()) : null);
+    }
+  });
+  renderFinance();  // rafraîchit aussi KPI/payroll via ses propres appels
+  renderKPI();
+  renderCalendar();
+  renderCalendarDetail(dateStr);
+  const today = new Date();
+  const dueDate = parseDate(dateStr);
+  const isEarly = value==='Payé' && dueDate && today < dueDate;
+  setStatus(`Brut du vendredi ${dateStr} marqué « ${value} »${isEarly ? ' — AVANCE (avant échéance)' : ''} pour toutes les lignes concernées.`, isEarly?'warn':'ok');
+}
+
 /* ============================= PERSISTANCE (JSON export/import) ============================= */
 document.getElementById('exportOverridesBtn').addEventListener('click', ()=>{
   const blob = new Blob([JSON.stringify(overrides,null,2)], {type:'application/json'});
@@ -611,12 +929,16 @@ document.getElementById('stateInput').addEventListener('change', e=>{
 document.getElementById('exportFinanceBtn').addEventListener('click', ()=>{
   if(!rawLignes.length){ showError('Rien à exporter — importez d\'abord un fichier.'); return; }
   const rows = rawLignes.map(l=> l.type==='MINT' ? {
-    Type:'MINT', Agent:l.agent, Date_Vente:l.dateVenteStr, Contrat:l.contrat,
-    Statut_CRM:l.statutCRM, Brut:l.brut, Activation:l.activation,
-    Decommissionne: l.decommissionne?'OUI':'NON', Net:l.net, Statut_Paiement:l.statutPaiement
+    Type:'MINT', Agent:l.agent, Date_Vente:l.dateVenteStr, Vendredi_Paie:l.vendrediPaiementStr, Contrat:l.contrat,
+    Statut_CRM:l.statutCRM, Brut:l.brut, Statut_Brut:l.decommissionne?'—':l.statutPaiementBrut,
+    Date_Paiement_Brut: l.decommissionne?'':(l.datePaiementBrut||''), Avance: isAvance(l)?'OUI':'NON',
+    Activation:l.activation, Statut_Activation:(l.activation===0||l.decommissionne)?'—':l.statutPaiementActivation,
+    Decommissionne: l.decommissionne?'OUI':'NON', Net:l.net
   } : {
-    Type:'CONSO', Agent:l.agent, Date_Vente:l.dateVenteStr, Contrat:l.contrat,
-    Statut_CRM:'', Signature:l.signature, M1:l.m1, M2:l.m2, Net:l.net, Statut_Paiement:l.statutPaiement
+    Type:'CONSO', Agent:l.agent, Date_Vente:l.dateVenteStr, Vendredi_Paie:'', Contrat:l.contrat,
+    Statut_CRM:'', Signature:l.signature, Statut_Brut:l.statutPaiement,
+    Date_Paiement_Brut:'', Avance:'NON',
+    M1:l.m1, M2:l.m2, Net:l.net
   });
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
