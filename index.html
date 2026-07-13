@@ -55,7 +55,7 @@
                     const s = document.getElementById('sheetSelector');
                     s.innerHTML = '<option value="">Choisir une feuille</option>';
                     wb.SheetNames.forEach(n => s.innerHTML += `<option value="${n}">${n}</option>`);
-                } catch(err) { document.getElementById('error-msg').innerText = "Erreur de lecture fichier"; }
+                } catch(err) { document.getElementById('error-msg').innerText = "Erreur fichier"; }
             };
             reader.readAsArrayBuffer(e.target.files[0]);
         });
@@ -65,15 +65,34 @@
             if(!name) return;
             const data = XLSX.utils.sheet_to_json(wb.Sheets[name]);
             
-            // 1. Suivi Opérationnel
-            new Tabulator("#table-suivi", { data: data, autoColumns: true });
+            // 1. Suivi Opérationnel avec colonnes de statuts dédiées
+            new Tabulator("#table-suivi", { 
+                data: data.map(r => ({
+                    ...r, 
+                    Statut_Energie: r.Statut_Energie || "N/A", 
+                    Statut_Conso: r.Statut_Conso || "N/A"
+                })), 
+                autoColumns: true,
+                columns: [
+                    {title: "Statut Énergie", field: "Statut_Energie", editor: "select", editorParams: {values: ["Activé", "Annulé", "Résilé", "Rétracté", "Refusé"]}},
+                    {title: "Statut Conso", field: "Statut_Conso", editor: "select", editorParams: {values: ["Activé", "Annulé", "Résilé", "Rétracté", "Refusé"]}}
+                ]
+            });
 
-            // 2. Finance & Compliance
+            // 2. Finance & Compliance (Logique unités MINT + statuts)
             const proc = data.map(r => {
-                let status = String(r['Status'] || "").toLowerCase();
+                let statusE = String(r.Statut_Energie || r['Status'] || "").toLowerCase();
+                let statusC = String(r.Statut_Conso || r['Status'] || "").toLowerCase();
                 let date = moment(r['Date de Vente'], 'DD/MM/YYYY');
-                let mint = ((String(r['Numéro Contrat Energie'] || "").match(/\d{7}/g) || []).length * 50) + (status === 'activé' ? 150 : 0) - (['annulé', 'rétracté', 'résilié'].includes(status) ? 150 : 0);
-                let conso = String(r['Numéro Contrat ConsoPilote'] || "").trim() !== "" ? (100 + (moment().diff(date, 'months') >= 1 ? 50 : 0) + (moment().diff(date, 'months') >= 2 ? 50 : 0)) : 0;
+                
+                // Nombre d'unités Mint (jusqu'à 2 contrats)
+                let units = (String(r['Numéro Contrat Energie'] || "").match(/\d{7}/g) || []).length;
+                let mint = (units * 50) + (statusE === 'activé' ? 150 : 0) - (['annulé', 'résilé', 'rétracté', 'refusé'].includes(statusE) ? 150 : 0);
+                
+                let isConso = String(r['Numéro Contrat ConsoPilote'] || "").trim() !== "";
+                let conso = isConso ? (100 + (moment().diff(date, 'months') >= 1 ? 50 : 0) + (moment().diff(date, 'months') >= 2 ? 50 : 0)) : 0;
+                if(['annulé', 'résilé', 'rétracté', 'refusé'].includes(statusC)) conso = 0;
+
                 return {...r, Montant_Mint: mint, Montant_Conso: conso, Etat_Mint: "Non Payé", Etat_Conso: "Non Payé"};
             });
 
@@ -94,7 +113,7 @@
                 let ag = r['Nom du Commercial'];
                 if(!acc[ag]) acc[ag] = {Agent: ag, Ventes: 0, Annulations: 0};
                 acc[ag].Ventes++;
-                if(['annulé', 'rétracté', 'résilié'].includes(String(r['Status']).toLowerCase())) acc[ag].Annulations++;
+                if(['annulé', 'résilé', 'rétracté', 'refusé'].includes(String(r['Status']).toLowerCase())) acc[ag].Annulations++;
                 return acc;
             }, {});
             new Tabulator("#table-kpi", { data: Object.values(kpi), autoColumns: true });
