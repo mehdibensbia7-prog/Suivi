@@ -283,7 +283,7 @@
       <h2>Suivi Qualité <span class="sub">— aucune donnée financière affichée. Droit de statuer sur une annulation de contrat pour raison qualité uniquement.</span></h2>
       <div class="filters">
         <select id="qualiteFilterAgent"><option value="">Tous les agents</option></select>
-        <select id="qualiteFilterStatut"><option value="">Tous statuts</option><option value="actif">Actif / en cours</option><option value="annule_qualite">Annulé (qualité)</option></select>
+        <select id="qualiteFilterStatut"><option value="">Tous statuts</option><option value="actif">Actif / en cours</option><option value="annule_qualite">Annulé (qualité)</option><option value="revue">⚠ Revue requise</option></select>
       </div>
       <div id="table-qualite" class="table-scroll"></div>
     </div>
@@ -506,7 +506,7 @@ document.getElementById('fileInput').addEventListener('change', function(e){
       workbook.SheetNames.forEach(n=>{
         const o = document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o);
       });
-      if(workbook.SheetNames.length){ sel.value = workbook.SheetNames[0]; processSheet(); }
+      if(workbook.SheetNames.length){ sel.value = workbook.SheetNames[0]; autoDetectAndProcess(); }
       setStatus('Fichier chargé : '+file.name, 'ok');
     }catch(err){
       showError('Impossible de lire le fichier : '+err.message);
@@ -516,10 +516,17 @@ document.getElementById('fileInput').addEventListener('change', function(e){
   reader.onerror = ()=>{ showError('Erreur de lecture disque du fichier.'); };
   reader.readAsArrayBuffer(file);
 });
-document.getElementById('sheetSelector').addEventListener('change', processSheet);
+// la liste déroulante sert d'information / d'inspection manuelle ; elle ne relance PAS un parsing
+// partiel — l'import scanne systématiquement TOUT le classeur (le fichier peut avoir la table de
+// suivi et l'export CRM sur la même feuille, empilés, OU sur deux feuilles séparées).
+document.getElementById('sheetSelector').addEventListener('change', ()=>{
+  const name = document.getElementById('sheetSelector').value;
+  if(name) renderRawSheetPreview(name);
+});
 
-/* ============================= DÉTECTION DES 2 TABLES ============================= */
+/* ============================= DÉTECTION DES 2 TABLES (sur tout le classeur) ============================= */
 // Table A = suivi commercial (formulaire agents). Table B = export CRM (statuts contrats).
+// Elles peuvent être : (1) empilées dans la même feuille, ou (2) sur deux feuilles distinctes.
 function findHeaderIndex(rows, candidates){
   for(let i=0;i<rows.length;i++){
     const row = rows[i] || [];
@@ -531,80 +538,138 @@ function findHeaderIndex(rows, candidates){
   return -1;
 }
 function colIndexByNames(header, names){
+  // 1) correspondance exacte d'abord
   for(const name of names){
     const target = norm(name);
     for(let i=0;i<header.length;i++){
       if(norm(header[i]) === target) return i;
     }
   }
+  // 2) repli tolérant : préfixe commun (gère les libellés tronqués/variables entre exports CRM,
+  //    ex. "REF SOUSCRIPTI" vs "REF SOUSCRIPTION")
+  for(const name of names){
+    const target = norm(name);
+    for(let i=0;i<header.length;i++){
+      const h = norm(header[i]);
+      if(h && target && (h.startsWith(target) || target.startsWith(h))) return i;
+    }
+  }
+  return -1;
+}
+function findTableBHeaderIndex(rows){
+  for(let i=0;i<rows.length;i++){
+    const row = rows[i]||[];
+    if(row.some(c=>norm(c).startsWith('ref souscri'))) return i;
+  }
   return -1;
 }
 
-function processSheet(){
+function autoDetectAndProcess(){
   clearError();
-  const name = document.getElementById('sheetSelector').value;
-  if(!workbook || !name) return;
+  if(!workbook) return;
   try{
-    const ws = workbook.Sheets[name];
-    const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:null});
-    if(!rows.length) throw new Error('Feuille vide.');
+    let foundA = null, foundB = null;
 
-    const idxA = findHeaderIndex(rows, ['Horodateur','Date de Vente','Nom du Commercial']);
-    if(idxA === -1) throw new Error('Impossible de localiser l\'en-tête de la table de suivi (colonne "Date de Vente" ou "Nom du Commercial" introuvable).');
-    const headerA = rows[idxA];
+    // scan de toutes les feuilles pour repérer la table de suivi (A) et l'export CRM (B)
+    for(const sheetName of workbook.SheetNames){
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {header:1, raw:false, defval:null});
+      if(!rows.length) continue;
 
-    // cherche un 2e en-tête (export CRM) après idxA
-    let idxB = -1;
-    for(let i=idxA+1;i<rows.length;i++){
-      const row = rows[i]||[];
-      if(row.some(c=>norm(c)==='ref souscripti' || norm(c).startsWith('ref souscri'))){ idxB = i; break; }
+      if(!foundA){
+        const idxA = findHeaderIndex(rows, ['Horodateur','Date de Vente','Nom du Commercial']);
+        if(idxA !== -1){
+          const headerA = rows[idxA];
+          const testC = colIndexByNames(headerA, ['Date de Vente']);
+          const testAgent = colIndexByNames(headerA, ['Nom du Commercial']);
+          if(testC!==-1 && testAgent!==-1) foundA = {sheetName, idxA, rows, headerA};
+        }
+      }
+      // la table B peut être détectée même dans la feuille qui contient déjà A (juste après),
+      // ou dans une feuille à part entière consacrée uniquement à l'export CRM
+      const idxB = findTableBHeaderIndex(rows);
+      if(idxB !== -1 && !foundB){
+        foundB = {sheetName, idxB, rows, headerB: rows[idxB]};
+      }
     }
-    const bodyA = idxB===-1 ? rows.slice(idxA+1) : rows.slice(idxA+1, idxB);
-    const headerB = idxB===-1 ? null : rows[idxB];
-    const bodyB = idxB===-1 ? [] : rows.slice(idxB+1);
+
+    if(!foundA){
+      throw new Error('Impossible de localiser la table de suivi des ventes (colonnes "Date de Vente" / "Nom du Commercial") dans aucune des feuilles du classeur : ' + workbook.SheetNames.join(', ') + '.');
+    }
+
+    // si B a été trouvée DANS la même feuille que A et APRÈS la ligne d'en-tête de A → table empilée (ancien format)
+    let bodyA, bodyB = [], headerB = null, crmSheetInfo = 'aucun export CRM détecté';
+    if(foundB && foundB.sheetName===foundA.sheetName && foundB.idxB > foundA.idxA){
+      bodyA = foundA.rows.slice(foundA.idxA+1, foundB.idxB);
+      bodyB = foundB.rows.slice(foundB.idxB+1);
+      headerB = foundB.headerB;
+      crmSheetInfo = `export CRM rapproché (même feuille « ${foundA.sheetName} »)`;
+    } else {
+      bodyA = foundA.rows.slice(foundA.idxA+1);
+      if(foundB){
+        bodyB = foundB.rows.slice(foundB.idxB+1);
+        headerB = foundB.headerB;
+        crmSheetInfo = `export CRM rapproché (feuille séparée « ${foundB.sheetName} »)`;
+      }
+    }
 
     const cA = {
-      dateVente: colIndexByNames(headerA, ['Date de Vente']),
-      typeContrat: colIndexByNames(headerA, ['Type de Contrat']),
-      produit: colIndexByNames(headerA, ['Produit Vendu']),
-      contratEnergie: colIndexByNames(headerA, ['Numéro Contrat Energie','Numero Contrat Energie']),
-      nomClient: colIndexByNames(headerA, ['Nom du Client']),
-      prenomClient: colIndexByNames(headerA, ['Prénom du Client','Prenom du Client']),
-      commercial: colIndexByNames(headerA, ['Nom du Commercial']),
-      contratConso: colIndexByNames(headerA, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote'])
+      dateVente: colIndexByNames(foundA.headerA, ['Date de Vente']),
+      typeContrat: colIndexByNames(foundA.headerA, ['Type de Contrat']),
+      produit: colIndexByNames(foundA.headerA, ['Produit Vendu']),
+      contratEnergie: colIndexByNames(foundA.headerA, ['Numéro Contrat Energie','Numero Contrat Energie']),
+      nomClient: colIndexByNames(foundA.headerA, ['Nom du Client']),
+      prenomClient: colIndexByNames(foundA.headerA, ['Prénom du Client','Prenom du Client']),
+      commercial: colIndexByNames(foundA.headerA, ['Nom du Commercial']),
+      contratConso: colIndexByNames(foundA.headerA, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote'])
     };
     if(cA.dateVente===-1 || cA.commercial===-1 || cA.contratEnergie===-1){
-      throw new Error('Colonnes essentielles introuvables dans la table de suivi (Date de Vente / Nom du Commercial / Numéro Contrat Energie).');
+      throw new Error('Colonnes essentielles introuvables dans la table de suivi (Date de Vente / Nom du Commercial / Numéro Contrat Energie), feuille « '+foundA.sheetName+' ».');
     }
 
-    let cB = null, refMap = {};
+    let refMap = {};
     if(headerB){
-      cB = {
-        ref: colIndexByNames(headerB, ['REF SOUSCRIPTI']),
+      const cB = {
+        ref: colIndexByNames(headerB, ['REF SOUSCRIPTION','REF SOUSCRIPTI']),
         etat: colIndexByNames(headerB, ['ETAT']),
-        dateAct: colIndexByNames(headerB, ['DATE ACTIVATIO']),
-        dateResil: colIndexByNames(headerB, ['DATE RESILIATIO']),
+        dateAct: colIndexByNames(headerB, ['DATE ACTIVATION','DATE ACTIVATIO']),
+        dateResil: colIndexByNames(headerB, ['DATE RESILIATION','DATE RESILIATIO']),
         offre: colIndexByNames(headerB, ['OFFRE'])
       };
       bodyB.forEach(r=>{
         if(!r) return;
         const ref = r[cB.ref];
         if(ref===null || ref===undefined || String(ref).trim()==='') return;
-        refMap[String(ref).trim()] = {
+        // normalise "1804016.0" (nombre flottant Excel) → "1804016"
+        const refKey = String(ref).trim().replace(/\.0$/,'');
+        refMap[refKey] = {
           etat: cB.etat!==-1 ? r[cB.etat] : null,
           dateAct: cB.dateAct!==-1 ? r[cB.dateAct] : null,
           dateResil: cB.dateResil!==-1 ? r[cB.dateResil] : null
         };
       });
+      if(cB.ref===-1 || cB.etat===-1){
+        showError(`Feuille CRM « ${foundB.sheetName} » détectée mais colonnes REF/ETAT non reconnues — statuts non rapprochés. Vérifiez les en-têtes de cette feuille.`);
+      }
+    } else {
+      showError('Aucun export CRM trouvé dans le classeur : les contrats MINT resteront au statut "Introuvable (CRM)" et aucune activation/décommission automatique ne pourra être calculée tant que la feuille de statuts n\'est pas fournie.');
     }
 
     buildLignes(bodyA, cA, refMap, !!headerB);
     renderAll();
-    setStatus(`Analyse OK — ${bodyA.filter(r=>r&&r[cA.dateVente]).length} ventes brutes, ${rawLignes.length} lignes contrat, CRM ${headerB?'rapproché':'absent'}.`, 'ok');
+    setStatus(`Analyse OK — table ventes: feuille « ${foundA.sheetName} » (${bodyA.filter(r=>r&&r[cA.dateVente]).length} ventes) · ${crmSheetInfo} · ${rawLignes.length} lignes contrat.`, headerB ? 'ok' : 'warn');
   }catch(err){
+    // on efface les données précédentes pour ne jamais laisser un dashboard obsolète affiché avec un message d'erreur
+    rawLignes = [];
+    renderAll();
     showError(err.message);
-    setStatus('Échec de l\'analyse', 'error');
+    setStatus('Échec de l\'analyse — aucune donnée affichée', 'error');
   }
+}
+
+function renderRawSheetPreview(sheetName){
+  // aperçu brut de la feuille sélectionnée (aide au diagnostic), sans relancer le moteur de calcul
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {header:1, raw:false, defval:null});
+  setStatus(`Feuille « ${sheetName} » : ${rows.length} lignes brutes (aperçu seulement — les données affichées restent celles détectées automatiquement au chargement).`, 'ok');
 }
 
 /* ============================= EXTRACTION CONTRATS ============================= */
@@ -664,7 +729,13 @@ function setOverride(id, key, value){
 function buildLignes(bodyA, cA, refMap, hasCRM){
   rawLignes = [];
   const today = new Date();
-  let seq = 0;
+  const refSeen = {}; // désambiguïsation uniquement en cas de vrai doublon du même numéro de contrat
+
+  function stableId(prefix, ref){
+    refSeen[prefix+ref] = (refSeen[prefix+ref]||0) + 1;
+    const n = refSeen[prefix+ref];
+    return n===1 ? (prefix+'-'+ref) : (prefix+'-'+ref+'-dup'+n); // stable d'un import à l'autre
+  }
 
   bodyA.forEach(row=>{
     if(!row) return;
@@ -678,7 +749,6 @@ function buildLignes(bodyA, cA, refMap, hasCRM){
     // --- MINT ---
     const contracts = extractContractNumbers(row[cA.contratEnergie]);
     contracts.forEach(ref=>{
-      seq++;
       const info = refMap[ref];
       const etatRaw = info ? info.etat : null;
       const etatN = norm(etatRaw);
@@ -692,11 +762,20 @@ function buildLignes(bodyA, cA, refMap, hasCRM){
 
       const brut = 50;
       const activation = isActivated ? 150 : 0;
-      const autoClawback = isChute && withinClawbackWindow;
 
-      const lineId = 'MINT-'+ref+'-'+seq;
+      const lineId = stableId('MINT', ref);
       const manualOverride = overrides[lineId] || {};
       const decommissionManuel = !!manualOverride.decommissionManuel;
+      const wasBrutPaid = manualOverride.statutPaiementBrut === 'Payé';
+      const wasActivPaid = manualOverride.statutPaiementActivation === 'Payé';
+
+      // RÈGLE MÉTIER : un brut (ou une activation) déjà payé ne peut plus être repris
+      // automatiquement par le système. Si le CRM tombe en annulation après paiement,
+      // ce n'est PLUS un clawback automatique — ça devient une alerte qui nécessite une
+      // décision manuelle de Qualité (decommissionManuel), la seule habilitée à annuler
+      // un montant déjà versé.
+      const autoClawback = isChute && withinClawbackWindow && !wasBrutPaid && !wasActivPaid;
+      const needsQualityReview = isChute && (wasBrutPaid || wasActivPaid) && !decommissionManuel;
       const decommissionne = autoClawback || decommissionManuel;
 
       const net = decommissionne ? 0 : (brut + activation);
@@ -709,10 +788,11 @@ function buildLignes(bodyA, cA, refMap, hasCRM){
         statutCRM: found ? (etatRaw||'—') : 'Introuvable (CRM)',
         brut, activation, net,
         decommissionAuto: autoClawback, decommissionManuel,
-        decommissionne,
+        decommissionne, needsQualityReview,
         statutPaiementBrut: manualOverride.statutPaiementBrut || 'Non Payé',
         statutPaiementActivation: manualOverride.statutPaiementActivation || 'Non Payé',
         datePaiementBrut: manualOverride.datePaiementBrut || null,
+        motifQualite: manualOverride.motifQualite || '',
         pending: isPending,
         moisEcoules
       });
@@ -720,7 +800,6 @@ function buildLignes(bodyA, cA, refMap, hasCRM){
 
     // --- CONSOPILOTE ---
     if(cA.contratConso!==-1 && !isEmptyConso(row[cA.contratConso])){
-      seq++;
       const ref = String(row[cA.contratConso]).trim();
       const moisEcoules = monthsBetween(dateVente, today);
       const signature = 100;
@@ -728,7 +807,7 @@ function buildLignes(bodyA, cA, refMap, hasCRM){
       const m2 = (moisEcoules!==null && moisEcoules>=2) ? 50 : 0;
       const net = signature + m1 + m2;
 
-      const lineId = 'CONSO-'+ref+'-'+seq;
+      const lineId = stableId('CONSO', ref);
       const manualOverride = overrides[lineId] || {};
 
       rawLignes.push({
@@ -782,14 +861,19 @@ function renderSuivi(){
 function renderFinance(){
   const data = rawLignes.map(l=>{
     if(l.type==='MINT'){
+      const wasBrutPaid = l.statutPaiementBrut==='Payé';
       return {
         id:l.id, Type:'MINT', Agent:l.agent, Date:l.dateVenteStr, Vendredi:l.vendrediPaiementStr,
         Contrat:l.contrat,
-        Brut:l.brut, Statut_Brut: l.decommissionne ? '—' : l.statutPaiementBrut,
-        Date_Paiement: l.decommissionne ? '' : (l.datePaiementBrut||''),
+        Brut:l.brut,
+        Statut_Brut: l.decommissionne ? (wasBrutPaid ? 'Payé — annulé qualité' : '—') : l.statutPaiementBrut,
+        Date_Paiement: l.datePaiementBrut || '',
         Avance: isAvance(l),
-        Activation:l.activation, Statut_Activation: (l.activation===0 || l.decommissionne) ? '—' : l.statutPaiementActivation,
-        Decom_manuel:l.decommissionManuel, Net:l.net
+        Activation:l.activation,
+        Statut_Activation: l.activation===0 ? '—' : (l.decommissionne ? (l.statutPaiementActivation==='Payé' ? 'Payé — annulé qualité' : '—') : l.statutPaiementActivation),
+        Decom_manuel:l.decommissionManuel,
+        Revue_Qualite: l.needsQualityReview,
+        Net:l.net
       };
     }
     return {
@@ -797,7 +881,7 @@ function renderFinance(){
       Contrat:l.contrat,
       Brut:l.signature, Statut_Brut:l.statutPaiement, Date_Paiement:'', Avance:false,
       Activation:l.m1+l.m2, Statut_Activation:'—',
-      Decom_manuel:false, Net:l.net
+      Decom_manuel:false, Revue_Qualite:false, Net:l.net
     };
   });
 
@@ -811,12 +895,13 @@ function renderFinance(){
       {title:"Vendredi de paie", field:"Vendredi", width:110},
       {title:"Contrat", field:"Contrat", width:100},
       {title:"Brut (DH)", field:"Brut", width:80, hozAlign:"right"},
-      {title:"Statut Brut", field:"Statut_Brut", width:120,
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—',
+      {title:"Statut Brut", field:"Statut_Brut", width:150,
+        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—' && !cell.getValue().startsWith('Payé — annulé'),
         editorParams:{values:["Non Payé","Payé"]},
         formatter:c=>{
           const v=c.getValue();
           if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
+          if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
           return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
         },
         cellEdited:cell=>{
@@ -848,12 +933,13 @@ function renderFinance(){
         }
       },
       {title:"Activation (DH)", field:"Activation", width:100, hozAlign:"right"},
-      {title:"Statut Activation", field:"Statut_Activation", width:130,
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—',
+      {title:"Statut Activation", field:"Statut_Activation", width:150,
+        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—' && !cell.getValue().startsWith('Payé — annulé'),
         editorParams:{values:["Non Payé","Payé"]},
         formatter:c=>{
           const v=c.getValue();
           if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
+          if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
           return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
         },
         cellEdited:cell=>{
@@ -870,6 +956,7 @@ function renderFinance(){
           recomputeAndRerender();
         }
       },
+      {title:"⚠ Revue Qualité", field:"Revue_Qualite", width:130, formatter:c=>c.getValue() ? '<span class="tag warn">À statuer</span>' : ''},
       {title:"Net (DH)", field:"Net", width:90, hozAlign:"right",
         formatter:c=>`<b style="color:${c.getValue()>0?'#3fd6a4':'#8ea0bd'}">${c.getValue()} DH</b>`}
     ]
@@ -1028,10 +1115,13 @@ function renderKPI(){
 }
 
 function renderAlertes(){
-  const data = rawLignes.filter(l=>l.type==='MINT' && (l.pending || (l.moisEcoules!==null && l.moisEcoules>=2 && l.moisEcoules<=3 && !l.decommissionne))).map(l=>({
+  const data = rawLignes.filter(l=>l.type==='MINT' && (l.needsQualityReview || l.pending || (l.moisEcoules!==null && l.moisEcoules>=2 && l.moisEcoules<=3 && !l.decommissionne))).map(l=>({
     Agent:l.agent, Contrat:l.contrat, Date:l.dateVenteStr, Statut_CRM:l.statutCRM,
-    Alerte: l.pending ? 'Non rapproché avec le CRM' : `Échéance clawback dans ${3-l.moisEcoules} mois`
-  }));
+    Alerte: l.needsQualityReview ? 'Annulation CRM après paiement — décision Qualité requise'
+          : l.pending ? 'Non rapproché avec le CRM'
+          : `Échéance clawback dans ${3-l.moisEcoules} mois`,
+    _priorite: l.needsQualityReview ? 0 : (l.pending ? 1 : 2)
+  })).sort((a,b)=>a._priorite-b._priorite);
   if(tAlertes) tAlertes.destroy();
   tAlertes = new Tabulator("#table-alertes", {
     data, layout:"fitDataStretch", height:"320px", placeholder:"Aucune alerte active.",
@@ -1040,7 +1130,10 @@ function renderAlertes(){
       {title:"Contrat", field:"Contrat", width:120},
       {title:"Date vente", field:"Date", width:110},
       {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
-      {title:"Alerte", field:"Alerte", widthGrow:2, formatter:c=>`<span class="tag warn">${c.getValue()}</span>`}
+      {title:"Alerte", field:"Alerte", widthGrow:2, formatter:c=>{
+        const cls = c.getValue().includes('Qualité requise') ? 'bad' : 'warn';
+        return `<span class="tag ${cls}">${c.getValue()}</span>`;
+      }}
     ]
   });
 }
@@ -1066,14 +1159,18 @@ function renderQualite(){
       id:l.id, Agent:l.agent, Date:l.dateVenteStr, Contrat:l.contrat,
       Client:l.client, Statut_CRM:l.statutCRM,
       Decommission_Auto: l.decommissionAuto,
+      Revue_Necessaire: l.needsQualityReview,
       Annulation_Qualite: !!o.decommissionManuel,
       Motif: o.motifQualite || ''
     };
-  });
+  }).sort((a,b)=>(b.Revue_Necessaire?1:0)-(a.Revue_Necessaire?1:0));
 
   if(tQualite) tQualite.destroy();
   tQualite = new Tabulator("#table-qualite", {
     data, layout:"fitDataStretch", height:"460px", placeholder:"Aucune donnée — importez un fichier.",
+    rowFormatter:row=>{
+      if(row.getData().Revue_Necessaire) row.getElement().style.boxShadow = 'inset 3px 0 0 var(--red)';
+    },
     columns:[
       {title:"Agent", field:"Agent", widthGrow:2},
       {title:"Date vente", field:"Date", width:100},
@@ -1081,6 +1178,8 @@ function renderQualite(){
       {title:"Client", field:"Client", widthGrow:2},
       {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
       {title:"Décomm. auto (clawback <3 mois)", field:"Decommission_Auto", width:150, formatter:"tickCross"},
+      {title:"⚠ Revue requise", field:"Revue_Necessaire", width:130,
+        formatter:c=>c.getValue() ? '<span class="tag bad">Annulé CRM après paiement</span>' : ''},
       {title:"Annulation Qualité", field:"Annulation_Qualite", width:140, formatter:"tickCross",
         editor:"tickCross", editable:()=>canEditQuality(),
         cellEdited:cell=>{
@@ -1108,6 +1207,7 @@ function renderQualite(){
     if(a) tQualite.addFilter("Agent","=",a);
     if(s==='actif') tQualite.addFilter("Annulation_Qualite","=",false);
     if(s==='annule_qualite') tQualite.addFilter("Annulation_Qualite","=",true);
+    if(s==='revue') tQualite.addFilter("Revue_Necessaire","=",true);
   };
 }
 
