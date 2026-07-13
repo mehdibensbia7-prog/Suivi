@@ -1,135 +1,628 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <title>SIPP - Pilotage Global Intégral</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
-    <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
-    <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
-    <style>
-        body { background: #0f172a; color: #e2e8f0; font-family: sans-serif; padding: 20px; }
-        .nav { display: flex; gap: 10px; margin-bottom: 20px; }
-        .tab-content { display: none; padding: 20px; background: #1e293b; border-radius: 10px; }
-        .active { display: block; }
-        .summary-box { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; padding: 15px; background: #0f172a; border: 1px solid #3498db; }
-        .stat { font-size: 1.2em; font-weight: bold; color: #3498db; }
-        .error { color: #f87171; font-weight: bold; margin: 10px 0; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIPP — Pilotage Ventes MINT & ConsoPilote</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
+<script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
+<style>
+  :root{
+    --bg:#0b1220; --panel:#111c2f; --panel2:#0e1830; --line:#1f2f4a;
+    --ink:#e7edf7; --ink-dim:#8ea0bd; --mint:#3fd6a4; --amber:#e8a83f;
+    --red:#e8556f; --blue:#5b9bf2;
+    --mono:'JetBrains Mono','Fira Code',ui-monospace,SFMono-Regular,Consolas,monospace;
+    --sans:'Inter','Segoe UI',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);}
+  header{padding:22px 28px 14px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:20;}
+  header .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--mint);text-transform:uppercase;}
+  header h1{margin:4px 0 2px;font-size:22px;font-weight:700;letter-spacing:-.01em;}
+  header p{margin:0;color:var(--ink-dim);font-size:13px;}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:16px 28px;border-bottom:1px solid var(--line);background:var(--panel2);}
+  .toolbar label.file-btn{background:var(--mint);color:#06251c;font-weight:600;padding:9px 16px;border-radius:7px;cursor:pointer;font-size:13px;}
+  .toolbar input[type=file]{display:none;}
+  select, .btn{background:var(--panel);color:var(--ink);border:1px solid var(--line);padding:9px 12px;border-radius:7px;font-size:13px;cursor:pointer;}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#061223;font-weight:600;}
+  .btn.ghost{background:transparent;}
+  .btn.warn{border-color:var(--amber);color:var(--amber);}
+  #status-msg{font-family:var(--mono);font-size:12px;color:var(--ink-dim);}
+  #status-msg.error{color:var(--red);}
+  #status-msg.ok{color:var(--mint);}
+  .nav{display:flex;gap:6px;padding:14px 28px 0;border-bottom:1px solid var(--line);background:var(--bg);}
+  .nav button{background:transparent;border:none;color:var(--ink-dim);padding:10px 16px;font-size:13px;font-weight:600;border-bottom:2px solid transparent;cursor:pointer;}
+  .nav button.active{color:var(--mint);border-bottom-color:var(--mint);}
+  main{padding:20px 28px 60px;}
+  .tab{display:none;}
+  .tab.active{display:block;}
+  .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px;}
+  .stat-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  .stat-card .label{font-size:11px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.06em;font-family:var(--mono);}
+  .stat-card .value{font-size:22px;font-weight:700;margin-top:4px;font-family:var(--mono);}
+  .stat-card.mint .value{color:var(--mint);}
+  .stat-card.amber .value{color:var(--amber);}
+  .stat-card.red .value{color:var(--red);}
+  .stat-card.blue .value{color:var(--blue);}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:18px;}
+  .panel h2{margin:0 0 12px;font-size:15px;}
+  .panel h2 .sub{color:var(--ink-dim);font-weight:400;font-size:12px;}
+  #banner-error{display:none;background:#2a1420;border:1px solid var(--red);color:var(--red);padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;font-family:var(--mono);white-space:pre-wrap;}
+  .legend{font-size:12px;color:var(--ink-dim);margin-top:8px;}
+  .legend b{color:var(--ink);}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+  .empty{padding:40px;text-align:center;color:var(--ink-dim);font-size:13px;}
+  footer{padding:20px 28px;color:var(--ink-dim);font-size:11px;font-family:var(--mono);border-top:1px solid var(--line);}
+  .tabulator{background:transparent;border:none;font-size:12.5px;}
+  .tabulator-row{background:var(--panel2);}
+  .tabulator-row.tabulator-row-even{background:#0d1728;}
+  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;font-family:var(--mono);}
+  .tag.ok{background:#0d3327;color:var(--mint);}
+  .tag.warn{background:#3a2a10;color:var(--amber);}
+  .tag.bad{background:#3a1520;color:var(--red);}
+</style>
 </head>
 <body>
-    <h1>SIPP - Pilotage Global & Trésorerie</h1>
-    <div class="nav">
-        <button onclick="showTab('suivi')">Opérationnel</button>
-        <button onclick="showTab('finance')">Trésorerie</button>
-        <button onclick="showTab('kpi')">KPI Performance</button>
+
+<header>
+  <div class="eyebrow">SIPP · Direction d'Exploitation & de Production</div>
+  <h1>Pilotage Ventes — MINT & ConsoPilote</h1>
+  <p>Import du fichier de suivi brut → extraction automatique des contrats → moteur de commissions → trésorerie agent.</p>
+</header>
+
+<div class="toolbar">
+  <label class="file-btn">Importer le fichier .xlsx<input type="file" id="fileInput" accept=".xlsx,.xls"></label>
+  <select id="sheetSelector"><option value="">Feuille…</option></select>
+  <span style="width:1px;height:22px;background:var(--line);"></span>
+  <button class="btn" id="exportOverridesBtn">Exporter l'état (JSON)</button>
+  <label class="btn file-btn" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);">Importer l'état<input type="file" id="stateInput" accept=".json"></label>
+  <button class="btn primary" id="exportFinanceBtn">Exporter Trésorerie (.xlsx)</button>
+  <span id="status-msg"></span>
+</div>
+
+<div class="nav">
+  <button class="navbtn active" data-tab="suivi">Suivi Opérationnel</button>
+  <button class="navbtn" data-tab="finance">Trésorerie & Commissions</button>
+  <button class="navbtn" data-tab="kpi">KPI Agents</button>
+  <button class="navbtn" data-tab="alertes">Alertes & Compliance</button>
+</div>
+
+<main>
+  <div id="banner-error"></div>
+
+  <div class="tab active" id="tab-suivi">
+    <div class="panel">
+      <h2>Ventes brutes détectées <span class="sub">— table agents (Google Form) rapprochée avec l'export CRM (statuts)</span></h2>
+      <div id="table-suivi"></div>
+      <div class="legend">Un contrat MINT est reconnu par toute séquence de <b>5 à 7 chiffres</b> trouvée dans la colonne « Numéro Contrat Energie » — séparateurs acceptés : espace, <code>/</code>, <code>-</code>, <code>//</code>, <code>_</code>. Chaque séquence = 1 vente MINT distincte. La colonne « Numéro Contrat ConsoPilote » (si non vide, non nulle, non « * ») déclenche une vente ConsoPilote.</div>
     </div>
+  </div>
 
-    <input type="file" id="fileInput" />
-    <select id="sheetSelector" onchange="processData()"><option value="">Choisir une feuille</option></select>
-    <div id="error-msg" class="error"></div>
-
-    <div id="suivi" class="tab-content active"><div id="table-suivi"></div></div>
-    <div id="finance" class="tab-content">
-        <div class="summary-box">
-            <div>MINT à Payer : <span id="mint-apayer" class="stat">0 DH</span></div>
-            <div>CONSO à Payer : <span id="conso-apayer" class="stat">0 DH</span></div>
-            <div>TOTAL PAYÉ : <span id="total-paye" class="stat">0 DH</span></div>
-        </div>
-        <div id="table-finance"></div>
+  <div class="tab" id="tab-finance">
+    <div class="summary-grid" id="finance-summary"></div>
+    <div class="panel">
+      <h2>Détail par contrat <span class="sub">— éditez « Statut Paiement » et « Décommissionné (manuel) » directement dans le tableau</span></h2>
+      <div class="filters">
+        <select id="filterAgent"><option value="">Tous les agents</option></select>
+        <select id="filterType"><option value="">MINT + ConsoPilote</option><option value="MINT">MINT seul</option><option value="CONSO">ConsoPilote seul</option></select>
+        <select id="filterStatutPaie"><option value="">Tous statuts paiement</option><option value="Payé">Payé</option><option value="Non Payé">Non Payé</option></select>
+      </div>
+      <div id="table-finance"></div>
     </div>
-    <div id="kpi" class="tab-content"><div id="table-kpi"></div></div>
+  </div>
 
-    <script>
-        let wb = null;
-        function showTab(id) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.getElementById(id).classList.add('active');
+  <div class="tab" id="tab-kpi">
+    <div class="panel">
+      <h2>Performance par agent</h2>
+      <div id="table-kpi"></div>
+    </div>
+  </div>
+
+  <div class="tab" id="tab-alertes">
+    <div class="panel">
+      <h2>Contrats à surveiller <span class="sub">— non trouvés dans l'export CRM, en attente, ou proches de l'échéance clawback (3 mois)</span></h2>
+      <div id="table-alertes"></div>
+    </div>
+  </div>
+</main>
+
+<footer>SIPP v1 — moteur de calcul 100% client-side (aucune donnée envoyée à un serveur). Règles de commissionnement : voir cahier des charges.</footer>
+
+<script>
+/* ============================= ÉTAT GLOBAL ============================= */
+let workbook = null;
+let rawLignes = [];       // toutes les lignes-contrat calculées (MINT + CONSO)
+let overrides = {};       // { lineId: { statutPaiement: 'Payé'|'Non Payé', decommissionManuel: bool } }
+let tSuivi, tFinance, tKPI, tAlertes;
+
+const STATUTS_CHUTE = ['annulee','annule','retractee','retracte','resilie','resiliee','refuse','refusee'];
+const norm = s => (s==null?'':String(s)).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+
+/* ============================= UI: NAV & MESSAGES ============================= */
+document.querySelectorAll('.navbtn').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    document.querySelectorAll('.navbtn').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    document.getElementById('tab-'+b.dataset.tab).classList.add('active');
+  });
+});
+function setStatus(msg, kind){
+  const el = document.getElementById('status-msg');
+  el.textContent = msg; el.className = kind||'';
+}
+function showError(msg){
+  const el = document.getElementById('banner-error');
+  el.style.display='block'; el.textContent = '⚠ ' + msg;
+}
+function clearError(){
+  document.getElementById('banner-error').style.display='none';
+}
+
+/* ============================= IMPORT FICHIER ============================= */
+document.getElementById('fileInput').addEventListener('change', function(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  clearError();
+  setStatus('Lecture du fichier…');
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    try{
+      const data = new Uint8Array(ev.target.result);
+      workbook = XLSX.read(data, {type:'array', cellDates:true});
+      const sel = document.getElementById('sheetSelector');
+      sel.innerHTML = '<option value="">Feuille…</option>';
+      workbook.SheetNames.forEach(n=>{
+        const o = document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o);
+      });
+      if(workbook.SheetNames.length){ sel.value = workbook.SheetNames[0]; processSheet(); }
+      setStatus('Fichier chargé : '+file.name, 'ok');
+    }catch(err){
+      showError('Impossible de lire le fichier : '+err.message);
+      setStatus('Échec de lecture', 'error');
+    }
+  };
+  reader.onerror = ()=>{ showError('Erreur de lecture disque du fichier.'); };
+  reader.readAsArrayBuffer(file);
+});
+document.getElementById('sheetSelector').addEventListener('change', processSheet);
+
+/* ============================= DÉTECTION DES 2 TABLES ============================= */
+// Table A = suivi commercial (formulaire agents). Table B = export CRM (statuts contrats).
+function findHeaderIndex(rows, candidates){
+  for(let i=0;i<rows.length;i++){
+    const row = rows[i] || [];
+    for(const cell of row){
+      const c = norm(cell);
+      if(candidates.some(cand => c === norm(cand))) return i;
+    }
+  }
+  return -1;
+}
+function colIndexByNames(header, names){
+  for(const name of names){
+    const target = norm(name);
+    for(let i=0;i<header.length;i++){
+      if(norm(header[i]) === target) return i;
+    }
+  }
+  return -1;
+}
+
+function processSheet(){
+  clearError();
+  const name = document.getElementById('sheetSelector').value;
+  if(!workbook || !name) return;
+  try{
+    const ws = workbook.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:null});
+    if(!rows.length) throw new Error('Feuille vide.');
+
+    const idxA = findHeaderIndex(rows, ['Horodateur','Date de Vente','Nom du Commercial']);
+    if(idxA === -1) throw new Error('Impossible de localiser l\'en-tête de la table de suivi (colonne "Date de Vente" ou "Nom du Commercial" introuvable).');
+    const headerA = rows[idxA];
+
+    // cherche un 2e en-tête (export CRM) après idxA
+    let idxB = -1;
+    for(let i=idxA+1;i<rows.length;i++){
+      const row = rows[i]||[];
+      if(row.some(c=>norm(c)==='ref souscripti' || norm(c).startsWith('ref souscri'))){ idxB = i; break; }
+    }
+    const bodyA = idxB===-1 ? rows.slice(idxA+1) : rows.slice(idxA+1, idxB);
+    const headerB = idxB===-1 ? null : rows[idxB];
+    const bodyB = idxB===-1 ? [] : rows.slice(idxB+1);
+
+    const cA = {
+      dateVente: colIndexByNames(headerA, ['Date de Vente']),
+      typeContrat: colIndexByNames(headerA, ['Type de Contrat']),
+      produit: colIndexByNames(headerA, ['Produit Vendu']),
+      contratEnergie: colIndexByNames(headerA, ['Numéro Contrat Energie','Numero Contrat Energie']),
+      nomClient: colIndexByNames(headerA, ['Nom du Client']),
+      prenomClient: colIndexByNames(headerA, ['Prénom du Client','Prenom du Client']),
+      commercial: colIndexByNames(headerA, ['Nom du Commercial']),
+      contratConso: colIndexByNames(headerA, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote'])
+    };
+    if(cA.dateVente===-1 || cA.commercial===-1 || cA.contratEnergie===-1){
+      throw new Error('Colonnes essentielles introuvables dans la table de suivi (Date de Vente / Nom du Commercial / Numéro Contrat Energie).');
+    }
+
+    let cB = null, refMap = {};
+    if(headerB){
+      cB = {
+        ref: colIndexByNames(headerB, ['REF SOUSCRIPTI']),
+        etat: colIndexByNames(headerB, ['ETAT']),
+        dateAct: colIndexByNames(headerB, ['DATE ACTIVATIO']),
+        dateResil: colIndexByNames(headerB, ['DATE RESILIATIO']),
+        offre: colIndexByNames(headerB, ['OFFRE'])
+      };
+      bodyB.forEach(r=>{
+        if(!r) return;
+        const ref = r[cB.ref];
+        if(ref===null || ref===undefined || String(ref).trim()==='') return;
+        refMap[String(ref).trim()] = {
+          etat: cB.etat!==-1 ? r[cB.etat] : null,
+          dateAct: cB.dateAct!==-1 ? r[cB.dateAct] : null,
+          dateResil: cB.dateResil!==-1 ? r[cB.dateResil] : null
+        };
+      });
+    }
+
+    buildLignes(bodyA, cA, refMap, !!headerB);
+    renderAll();
+    setStatus(`Analyse OK — ${bodyA.filter(r=>r&&r[cA.dateVente]).length} ventes brutes, ${rawLignes.length} lignes contrat, CRM ${headerB?'rapproché':'absent'}.`, 'ok');
+  }catch(err){
+    showError(err.message);
+    setStatus('Échec de l\'analyse', 'error');
+  }
+}
+
+/* ============================= EXTRACTION CONTRATS ============================= */
+function extractContractNumbers(val){
+  if(val===null || val===undefined) return [];
+  const s = String(val).trim();
+  if(s==='' || s==='0' || s==='*' || s==='\\*') return [];
+  const found = s.match(/\d{5,}/g);
+  return found ? found : [];
+}
+function isEmptyConso(val){
+  if(val===null||val===undefined) return true;
+  const s = String(val).trim();
+  return s==='' || s==='0' || s==='*' || s==='\\*';
+}
+function parseDate(v){
+  if(v===null||v===undefined||v==='') return null;
+  if(v instanceof Date && !isNaN(v)) return v;
+  const s = String(v).trim();
+  // formats: DD/MM/YYYY, YYYY-MM-DD, "DD/MM/YYYY à HH:MM"
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m) return new Date(+m[3], +m[2]-1, +m[1]);
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
+}
+function monthsBetween(d1, d2){
+  if(!d1||!d2) return null;
+  return (d2.getFullYear()-d1.getFullYear())*12 + (d2.getMonth()-d1.getMonth()) - (d2.getDate()<d1.getDate()?1:0);
+}
+function fmtDate(d){ return d ? d.toLocaleDateString('fr-FR') : ''; }
+
+/* ============================= MOTEUR DE CALCUL ============================= */
+function buildLignes(bodyA, cA, refMap, hasCRM){
+  rawLignes = [];
+  const today = new Date();
+  let seq = 0;
+
+  bodyA.forEach(row=>{
+    if(!row) return;
+    const dateVenteRaw = row[cA.dateVente];
+    if(dateVenteRaw===null || dateVenteRaw===undefined || String(dateVenteRaw).trim()==='') return;
+    const dateVente = parseDate(dateVenteRaw);
+    const agent = (row[cA.commercial]||'').toString().trim() || '(agent non renseigné)';
+    const client = [row[cA.nomClient], row[cA.prenomClient]].filter(Boolean).join(' ').trim();
+    const produit = cA.produit!==-1 ? row[cA.produit] : '';
+
+    // --- MINT ---
+    const contracts = extractContractNumbers(row[cA.contratEnergie]);
+    contracts.forEach(ref=>{
+      seq++;
+      const info = refMap[ref];
+      const etatRaw = info ? info.etat : null;
+      const etatN = norm(etatRaw);
+      const found = !!info;
+      const isActivated = etatN.startsWith('activ');
+      const isChute = STATUTS_CHUTE.some(s => etatN.startsWith(s));
+      const isPending = !found || etatN.startsWith('introuvable') || etatN.startsWith('en attente');
+
+      const moisEcoules = monthsBetween(dateVente, today);
+      const withinClawbackWindow = moisEcoules !== null && moisEcoules <= 3;
+
+      const brut = 50;
+      const activation = isActivated ? 150 : 0;
+      const autoClawback = isChute && withinClawbackWindow;
+
+      const lineId = 'MINT-'+ref+'-'+seq;
+      const manualOverride = overrides[lineId] || {};
+      const decommissionManuel = !!manualOverride.decommissionManuel;
+      const decommissionne = autoClawback || decommissionManuel;
+
+      const net = decommissionne ? 0 : (brut + activation);
+
+      rawLignes.push({
+        id: lineId, type:'MINT', agent, dateVente, dateVenteStr: fmtDate(dateVente),
+        contrat: ref, client, produit,
+        statutCRM: found ? (etatRaw||'—') : 'Introuvable (CRM)',
+        brut, activation, net,
+        decommissionAuto: autoClawback, decommissionManuel,
+        decommissionne,
+        statutPaiement: manualOverride.statutPaiement || 'Non Payé',
+        pending: isPending,
+        moisEcoules
+      });
+    });
+
+    // --- CONSOPILOTE ---
+    if(cA.contratConso!==-1 && !isEmptyConso(row[cA.contratConso])){
+      seq++;
+      const ref = String(row[cA.contratConso]).trim();
+      const moisEcoules = monthsBetween(dateVente, today);
+      const signature = 100;
+      const m1 = (moisEcoules!==null && moisEcoules>=1) ? 50 : 0;
+      const m2 = (moisEcoules!==null && moisEcoules>=2) ? 50 : 0;
+      const net = signature + m1 + m2;
+
+      const lineId = 'CONSO-'+ref+'-'+seq;
+      const manualOverride = overrides[lineId] || {};
+
+      rawLignes.push({
+        id: lineId, type:'CONSO', agent, dateVente, dateVenteStr: fmtDate(dateVente),
+        contrat: ref, client, produit: 'ConsoPilote',
+        signature, m1, m2, net,
+        m1Echu: moisEcoules!==null && moisEcoules>=1,
+        m2Echu: moisEcoules!==null && moisEcoules>=2,
+        statutPaiement: manualOverride.statutPaiement || 'Non Payé',
+        moisEcoules
+      });
+    }
+  });
+}
+
+/* ============================= RENDU TABLES ============================= */
+function renderAll(){
+  renderSuivi();
+  renderFinance();
+  renderKPI();
+  renderAlertes();
+  populateAgentFilter();
+}
+
+function renderSuivi(){
+  const data = rawLignes.map(l=>({
+    Type: l.type, Agent: l.agent, Date_Vente: l.dateVenteStr, Contrat: l.contrat,
+    Client: l.client, Produit: l.produit,
+    Statut_CRM: l.type==='MINT' ? l.statutCRM : '—'
+  }));
+  if(tSuivi) tSuivi.destroy();
+  tSuivi = new Tabulator("#table-suivi", {
+    data, layout:"fitColumns", height:"420px", placeholder:"Aucune donnée — importez un fichier.",
+    columns:[
+      {title:"Type", field:"Type", width:90, formatter: c=>{
+        const v=c.getValue(); return `<span class="tag ${v==='MINT'?'ok':'warn'}">${v}</span>`;
+      }},
+      {title:"Agent", field:"Agent", widthGrow:2},
+      {title:"Date de vente", field:"Date_Vente", width:120},
+      {title:"N° Contrat", field:"Contrat", width:130},
+      {title:"Client", field:"Client", widthGrow:2},
+      {title:"Produit", field:"Produit", widthGrow:1},
+      {title:"Statut CRM", field:"Statut_CRM", widthGrow:1}
+    ]
+  });
+}
+
+function renderFinance(){
+  const rows = document.getElementById('table-finance');
+  const data = rawLignes.map(l=>{
+    if(l.type==='MINT'){
+      return {
+        id:l.id, Type:'MINT', Agent:l.agent, Date:l.dateVenteStr, Contrat:l.contrat,
+        Brut:l.brut, Activation:l.activation, Decommissionne:l.decommissionne,
+        Decom_manuel:l.decommissionManuel, Net:l.net, Statut_Paiement:l.statutPaiement,
+        _statutCRM:l.statutCRM
+      };
+    }
+    return {
+      id:l.id, Type:'CONSO', Agent:l.agent, Date:l.dateVenteStr, Contrat:l.contrat,
+      Brut:l.signature, Activation:l.m1+l.m2, Decommissionne:false, Decom_manuel:false,
+      Net:l.net, Statut_Paiement:l.statutPaiement, _statutCRM:''
+    };
+  });
+
+  if(tFinance) tFinance.destroy();
+  tFinance = new Tabulator("#table-finance", {
+    data, layout:"fitColumns", height:"460px", placeholder:"Aucune donnée.",
+    columns:[
+      {title:"Type", field:"Type", width:80, formatter:c=>`<span class="tag ${c.getValue()==='MINT'?'ok':'warn'}">${c.getValue()}</span>`},
+      {title:"Agent", field:"Agent", widthGrow:2},
+      {title:"Date vente", field:"Date", width:100},
+      {title:"Contrat", field:"Contrat", width:110},
+      {title:"Brut/Signature (DH)", field:"Brut", width:140, hozAlign:"right"},
+      {title:"Activation/M+1+M+2 (DH)", field:"Activation", width:170, hozAlign:"right"},
+      {title:"Décommissionné", field:"Decom_manuel", width:130, formatter:"tickCross", editor:"tickCross",
+        cellEdited:cell=>{
+          const r = cell.getRow().getData();
+          overrides[r.id] = overrides[r.id]||{};
+          overrides[r.id].decommissionManuel = cell.getValue();
+          recomputeAndRerender();
         }
-
-        document.getElementById('fileInput').addEventListener('change', (e) => {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                try {
-                    wb = XLSX.read(new Uint8Array(ev.target.result), {type: 'array'});
-                    const s = document.getElementById('sheetSelector');
-                    s.innerHTML = '<option value="">Choisir une feuille</option>';
-                    wb.SheetNames.forEach(n => s.innerHTML += `<option value="${n}">${n}</option>`);
-                } catch(err) { document.getElementById('error-msg').innerText = "Erreur fichier"; }
-            };
-            reader.readAsArrayBuffer(e.target.files[0]);
-        });
-
-        function processData() {
-            const name = document.getElementById('sheetSelector').value;
-            if(!name) return;
-            const data = XLSX.utils.sheet_to_json(wb.Sheets[name]);
-            
-            // 1. Suivi Opérationnel avec colonnes de statuts dédiées
-            new Tabulator("#table-suivi", { 
-                data: data.map(r => ({
-                    ...r, 
-                    Statut_Energie: r.Statut_Energie || "N/A", 
-                    Statut_Conso: r.Statut_Conso || "N/A"
-                })), 
-                autoColumns: true,
-                columns: [
-                    {title: "Statut Énergie", field: "Statut_Energie", editor: "select", editorParams: {values: ["Activé", "Annulé", "Résilé", "Rétracté", "Refusé"]}},
-                    {title: "Statut Conso", field: "Statut_Conso", editor: "select", editorParams: {values: ["Activé", "Annulé", "Résilé", "Rétracté", "Refusé"]}}
-                ]
-            });
-
-            // 2. Finance & Compliance (Logique unités MINT + statuts)
-            const proc = data.map(r => {
-                let statusE = String(r.Statut_Energie || r['Status'] || "").toLowerCase();
-                let statusC = String(r.Statut_Conso || r['Status'] || "").toLowerCase();
-                let date = moment(r['Date de Vente'], 'DD/MM/YYYY');
-                
-                // Nombre d'unités Mint (jusqu'à 2 contrats)
-                let units = (String(r['Numéro Contrat Energie'] || "").match(/\d{7}/g) || []).length;
-                let mint = (units * 50) + (statusE === 'activé' ? 150 : 0) - (['annulé', 'résilé', 'rétracté', 'refusé'].includes(statusE) ? 150 : 0);
-                
-                let isConso = String(r['Numéro Contrat ConsoPilote'] || "").trim() !== "";
-                let conso = isConso ? (100 + (moment().diff(date, 'months') >= 1 ? 50 : 0) + (moment().diff(date, 'months') >= 2 ? 50 : 0)) : 0;
-                if(['annulé', 'résilé', 'rétracté', 'refusé'].includes(statusC)) conso = 0;
-
-                return {...r, Montant_Mint: mint, Montant_Conso: conso, Etat_Mint: "Non Payé", Etat_Conso: "Non Payé"};
-            });
-
-            new Tabulator("#table-finance", {
-                data: proc,
-                columns: [
-                    {title: "Agent", field: "Nom du Commercial"},
-                    {title: "MINT", field: "Montant_Mint"},
-                    {title: "Statut MINT", field: "Etat_Mint", editor: "select", editorParams: {values: ["Non Payé", "Payé"]}},
-                    {title: "CONSO", field: "Montant_Conso"},
-                    {title: "Statut CONSO", field: "Etat_Conso", editor: "select", editorParams: {values: ["Non Payé", "Payé"]}},
-                ],
-                cellEdited: updateBalance
-            });
-
-            // 3. KPI
-            const kpi = data.reduce((acc, r) => {
-                let ag = r['Nom du Commercial'];
-                if(!acc[ag]) acc[ag] = {Agent: ag, Ventes: 0, Annulations: 0};
-                acc[ag].Ventes++;
-                if(['annulé', 'résilé', 'rétracté', 'refusé'].includes(String(r['Status']).toLowerCase())) acc[ag].Annulations++;
-                return acc;
-            }, {});
-            new Tabulator("#table-kpi", { data: Object.values(kpi), autoColumns: true });
-            updateBalance();
+      },
+      {title:"Net (DH)", field:"Net", width:100, hozAlign:"right",
+        formatter:c=>`<b style="color:${c.getValue()>0?'#3fd6a4':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Statut paiement", field:"Statut_Paiement", width:140, editor:"list",
+        editorParams:{values:["Non Payé","Payé"]},
+        formatter:c=>`<span class="tag ${c.getValue()==='Payé'?'ok':'bad'}">${c.getValue()}</span>`,
+        cellEdited:cell=>{
+          const r = cell.getRow().getData();
+          overrides[r.id] = overrides[r.id]||{};
+          overrides[r.id].statutPaiement = cell.getValue();
+          renderFinanceSummary();
+          renderKPI();
         }
+      }
+    ]
+  });
 
-        function updateBalance() {
-            let m = 0, c = 0, p = 0;
-            Tabulator.findTable("#table-finance")[0].getData().forEach(row => {
-                if(row.Etat_Mint === "Non Payé") m += row.Montant_Mint; else p += row.Montant_Mint;
-                if(row.Etat_Conso === "Non Payé") c += row.Montant_Conso; else p += row.Montant_Conso;
-            });
-            document.getElementById('mint-apayer').innerText = m + " DH";
-            document.getElementById('conso-apayer').innerText = c + " DH";
-            document.getElementById('total-paye').innerText = p + " DH";
-        }
-    </script>
+  document.getElementById('filterAgent').onchange =
+  document.getElementById('filterType').onchange =
+  document.getElementById('filterStatutPaie').onchange = applyFinanceFilters;
+
+  renderFinanceSummary();
+}
+
+function applyFinanceFilters(){
+  const agent = document.getElementById('filterAgent').value;
+  const type = document.getElementById('filterType').value;
+  const statut = document.getElementById('filterStatutPaie').value;
+  tFinance.clearFilter();
+  if(agent) tFinance.addFilter("Agent","=",agent);
+  if(type) tFinance.addFilter("Type","=",type);
+  if(statut) tFinance.addFilter("Statut_Paiement","=",statut);
+}
+
+function recomputeAndRerender(){
+  // rejoue le moteur avec les overrides à jour (sans re-parser le fichier)
+  rawLignes.forEach(l=>{
+    if(l.type!=='MINT') return;
+    const o = overrides[l.id]||{};
+    l.decommissionManuel = !!o.decommissionManuel;
+    l.decommissionne = l.decommissionAuto || l.decommissionManuel;
+    l.net = l.decommissionne ? 0 : (l.brut + l.activation);
+  });
+  renderFinance();
+  renderKPI();
+  renderAlertes();
+}
+
+function renderFinanceSummary(){
+  const box = document.getElementById('finance-summary');
+  let mintBrutDu=0, mintPaye=0, consoDu=0, consoPaye=0, decom=0, totalGeneral=0;
+  rawLignes.forEach(l=>{
+    const paye = l.statutPaiement==='Payé';
+    if(l.type==='MINT'){
+      if(l.decommissionne) decom += (l.brut+l.activation);
+      else { if(paye) mintPaye+=l.net; else mintBrutDu+=l.net; totalGeneral+=l.net; }
+    } else {
+      if(paye) consoPaye+=l.net; else consoDu+=l.net;
+      totalGeneral+=l.net;
+    }
+  });
+  box.innerHTML = `
+    <div class="stat-card mint"><div class="label">MINT à payer</div><div class="value">${mintBrutDu} DH</div></div>
+    <div class="stat-card blue"><div class="label">MINT payé</div><div class="value">${mintPaye} DH</div></div>
+    <div class="stat-card amber"><div class="label">CONSO à payer</div><div class="value">${consoDu} DH</div></div>
+    <div class="stat-card blue"><div class="label">CONSO payé</div><div class="value">${consoPaye} DH</div></div>
+    <div class="stat-card red"><div class="label">Décommissionné (clawback)</div><div class="value">${decom} DH</div></div>
+    <div class="stat-card"><div class="label">Masse commissionnable totale</div><div class="value">${totalGeneral} DH</div></div>
+  `;
+}
+
+function renderKPI(){
+  const byAgent = {};
+  rawLignes.forEach(l=>{
+    const key = l.agent;
+    if(!byAgent[key]) byAgent[key] = {Agent:key, Ventes_MINT:0, Ventes_CONSO:0, Activees:0, Decommissionnees:0, Net_Total:0};
+    if(l.type==='MINT'){
+      byAgent[key].Ventes_MINT++;
+      if(l.activation>0) byAgent[key].Activees++;
+      if(l.decommissionne) byAgent[key].Decommissionnees++;
+      byAgent[key].Net_Total += l.net;
+    } else {
+      byAgent[key].Ventes_CONSO++;
+      byAgent[key].Net_Total += l.net;
+    }
+  });
+  const data = Object.values(byAgent).map(a=>({
+    ...a,
+    Taux_Activation: a.Ventes_MINT ? Math.round(100*a.Activees/a.Ventes_MINT)+'%' : '—',
+    Taux_Decommission: a.Ventes_MINT ? Math.round(100*a.Decommissionnees/a.Ventes_MINT)+'%' : '—'
+  })).sort((a,b)=>b.Net_Total-a.Net_Total);
+
+  if(tKPI) tKPI.destroy();
+  tKPI = new Tabulator("#table-kpi", {
+    data, layout:"fitColumns", height:"420px", placeholder:"Aucune donnée.",
+    columns:[
+      {title:"Agent", field:"Agent", widthGrow:2},
+      {title:"Ventes MINT", field:"Ventes_MINT", hozAlign:"center"},
+      {title:"Ventes ConsoPilote", field:"Ventes_CONSO", hozAlign:"center"},
+      {title:"Taux Activation MINT", field:"Taux_Activation", hozAlign:"center"},
+      {title:"Taux Décommission", field:"Taux_Decommission", hozAlign:"center"},
+      {title:"Net généré (DH)", field:"Net_Total", hozAlign:"right", formatter:c=>`<b>${c.getValue()} DH</b>`}
+    ]
+  });
+}
+
+function renderAlertes(){
+  const data = rawLignes.filter(l=>l.type==='MINT' && (l.pending || (l.moisEcoules!==null && l.moisEcoules>=2 && l.moisEcoules<=3 && !l.decommissionne))).map(l=>({
+    Agent:l.agent, Contrat:l.contrat, Date:l.dateVenteStr, Statut_CRM:l.statutCRM,
+    Alerte: l.pending ? 'Non rapproché avec le CRM' : `Échéance clawback dans ${3-l.moisEcoules} mois`
+  }));
+  if(tAlertes) tAlertes.destroy();
+  tAlertes = new Tabulator("#table-alertes", {
+    data, layout:"fitColumns", height:"320px", placeholder:"Aucune alerte active.",
+    columns:[
+      {title:"Agent", field:"Agent", widthGrow:2},
+      {title:"Contrat", field:"Contrat", width:120},
+      {title:"Date vente", field:"Date", width:110},
+      {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
+      {title:"Alerte", field:"Alerte", widthGrow:2, formatter:c=>`<span class="tag warn">${c.getValue()}</span>`}
+    ]
+  });
+}
+
+function populateAgentFilter(){
+  const agents = [...new Set(rawLignes.map(l=>l.agent))].sort();
+  const sel = document.getElementById('filterAgent');
+  sel.innerHTML = '<option value="">Tous les agents</option>' + agents.map(a=>`<option value="${a}">${a}</option>`).join('');
+}
+
+/* ============================= PERSISTANCE (JSON export/import) ============================= */
+document.getElementById('exportOverridesBtn').addEventListener('click', ()=>{
+  const blob = new Blob([JSON.stringify(overrides,null,2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'sipp_overrides_'+new Date().toISOString().slice(0,10)+'.json';
+  a.click();
+});
+document.getElementById('stateInput').addEventListener('change', e=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev=>{
+    try{
+      overrides = JSON.parse(ev.target.result);
+      if(rawLignes.length) recomputeAndRerender();
+      setStatus('État (paiements/décommissions) réimporté.', 'ok');
+    }catch(err){ showError('Fichier d\'état invalide : '+err.message); }
+  };
+  reader.readAsText(file);
+});
+
+/* ============================= EXPORT TRÉSORERIE XLSX ============================= */
+document.getElementById('exportFinanceBtn').addEventListener('click', ()=>{
+  if(!rawLignes.length){ showError('Rien à exporter — importez d\'abord un fichier.'); return; }
+  const rows = rawLignes.map(l=> l.type==='MINT' ? {
+    Type:'MINT', Agent:l.agent, Date_Vente:l.dateVenteStr, Contrat:l.contrat,
+    Statut_CRM:l.statutCRM, Brut:l.brut, Activation:l.activation,
+    Decommissionne: l.decommissionne?'OUI':'NON', Net:l.net, Statut_Paiement:l.statutPaiement
+  } : {
+    Type:'CONSO', Agent:l.agent, Date_Vente:l.dateVenteStr, Contrat:l.contrat,
+    Statut_CRM:'', Signature:l.signature, M1:l.m1, M2:l.m2, Net:l.net, Statut_Paiement:l.statutPaiement
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Tresorerie");
+  XLSX.writeFile(wb, 'tresorerie_'+new Date().toISOString().slice(0,10)+'.xlsx');
+});
+</script>
 </body>
 </html>
