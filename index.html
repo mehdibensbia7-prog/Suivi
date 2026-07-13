@@ -7,7 +7,7 @@
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; padding: 20px; }
+        body { font-family: sans-serif; background: #1a1a2e; color: #fff; padding: 20px; }
         .nav { display: flex; gap: 10px; margin-bottom: 20px; }
         .tab-content { display: none; padding: 20px; background: #16213e; border-radius: 12px; }
         .active { display: block; }
@@ -21,70 +21,68 @@
         <button onclick="showTab('kpi')">KPI Performance</button>
     </div>
 
-    <!-- Onglet Suivi -->
     <div id="suivi" class="tab-content active">
         <input type="file" id="fileInput" accept=".xlsx" />
-        <select id="sheetSelector" onchange="loadSheet()"></select>
-        <button onclick="saveModifications()">Sauvegarder les modifs</button>
+        <select id="sheetSelector" onchange="loadSheet()"><option value="">Choisir une feuille</option></select>
+        <button onclick="saveModifications()">Sauvegarder</button>
         <div id="table-container" style="margin-top:20px;"></div>
     </div>
 
-    <!-- Onglet KPI -->
     <div id="kpi" class="tab-content">
-        <h2>Analyse Taux de Chute & Activation</h2>
+        <h2>Analyse Performance</h2>
         <div id="kpi-container"></div>
     </div>
 
     <script>
         let workbook = null;
-        let table = null;
 
         function showTab(id) {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.getElementById(id).classList.add('active');
         }
 
-        document.getElementById('fileInput').addEventListener('change', function(e) {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                workbook = XLSX.read(new Uint8Array(ev.target.result), {type: 'array'});
-                const s = document.getElementById('sheetSelector');
-                workbook.SheetNames.forEach(n => s.innerHTML += `<option value="${n}">${n}</option>`);
-            };
-            reader.readAsArrayBuffer(e.target.files[0]);
-        });
+        window.onload = function() {
+            document.getElementById('fileInput').addEventListener('change', function(e) {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    workbook = XLSX.read(new Uint8Array(ev.target.result), {type: 'array'});
+                    const s = document.getElementById('sheetSelector');
+                    s.innerHTML = '<option value="">Choisir une feuille</option>';
+                    workbook.SheetNames.forEach(n => {
+                        let opt = document.createElement('option');
+                        opt.value = n; opt.innerHTML = n;
+                        s.appendChild(opt);
+                    });
+                };
+                reader.readAsArrayBuffer(e.target.files[0]);
+            });
+        };
 
         function loadSheet() {
-            const data = XLSX.utils.sheet_to_json(workbook.Sheets[document.getElementById('sheetSelector').value]);
-            table = new Tabulator("#table-container", { data: data, autoColumns: true, editor: "input" });
+            const name = document.getElementById('sheetSelector').value;
+            if(!name) return;
+            const data = XLSX.utils.sheet_to_json(workbook.Sheets[name]);
             
-            // Calcul KPI simplifiés
-            const kpiData = data.reduce((acc, row) => {
-                let agent = row['Nom du Commercial'];
-                if(!acc[agent]) acc[agent] = {Agent: agent, Ventes: 0, Annulations: 0};
-                acc[agent].Ventes++;
-                if(row['Status'] === 'Annulé') acc[agent].Annulations++;
+            new Tabulator("#table-container", { data: data, autoColumns: true, editor: "input" });
+            
+            // Calcul KPI automatique
+            const kpi = data.reduce((acc, row) => {
+                let ag = row['Nom du Commercial'];
+                if(!ag) return acc;
+                if(!acc[ag]) acc[ag] = {Agent: ag, Ventes: 0, Annulations: 0};
+                acc[ag].Ventes++;
+                if(row['Status'] === 'Annulé') acc[ag].Annulations++;
                 return acc;
             }, {});
-            
-            new Tabulator("#kpi-container", {
-                data: Object.values(kpiData),
-                columns: [
-                    {title: "Agent", field: "Agent"},
-                    {title: "Total Ventes", field: "Ventes"},
-                    {title: "Annulations", field: "Annulations"},
-                    {title: "Taux de Chute (%)", formatter: function(cell){
-                        let d = cell.getRow().getData();
-                        return ((d.Annulations/d.Ventes)*100).toFixed(2) + "%";
-                    }}
-                ]
-            });
+
+            new Tabulator("#kpi-container", { data: Object.values(kpi), autoColumns: true });
         }
 
         function saveModifications() {
+            alert("Sauvegarde en cours...");
             const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(table.getData()), "Export");
-            XLSX.writeFile(wb, "Suivi_MINT_KPI.xlsx");
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Tabulator.findTable("#table-container")[0].getData()), "Export");
+            XLSX.writeFile(wb, "Suivi_Complet.xlsx");
         }
     </script>
 </body>
