@@ -2,6 +2,8 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIPP — Pilotage Ventes MINT & ConsoPilote</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -136,6 +138,7 @@
   .login-input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:11px 12px;border-radius:7px;font-size:14px;font-family:var(--mono);}
   .login-error{color:var(--red);font-size:12px;font-family:var(--mono);margin-top:8px;min-height:16px;}
   .role-badge{font-family:var(--mono);font-size:11px;padding:6px 12px;border-radius:20px;background:#0d3327;color:var(--mint);border:1px solid var(--mint);white-space:nowrap;}
+  .confidential-banner{background:#241407;color:var(--amber);border-bottom:1px solid var(--amber);font-size:11.5px;font-family:var(--mono);padding:6px 28px;text-align:center;}
 </style>
 </head>
 <body>
@@ -180,6 +183,7 @@
     </div>
   </div>
 </header>
+<div class="confidential-banner">🔒 Données confidentielles — usage interne uniquement. Ne jamais partager le fichier importé, l'export d'état (.json) ou l'export trésorerie (.xlsx) hors de l'entreprise.</div>
 
 <div class="toolbar" id="mainToolbar">
   <label class="file-btn">Importer le fichier .xlsx<input type="file" id="fileInput" accept=".xlsx,.xls"></label>
@@ -320,16 +324,27 @@ const norm = s => (s==null?'':String(s)).toLowerCase().normalize('NFD').replace(
 /* ============================= RÔLES & PERMISSIONS =============================
    ⚠ Contrôle d'accès CÔTÉ CLIENT uniquement (page statique, sans serveur).
    Cela structure l'usage et évite les erreurs de manipulation entre profils,
-   mais n'est PAS une sécurité : quiconque ouvre le code source de la page peut lire
-   les codes ci-dessous. Pour des données sensibles, hébergez cette logique côté serveur.
-   → Changez les codes ici avant diffusion : */
-const ROLE_CODES = {
-  superadmin: 'SUPER-2026',
-  directeur:  'DIRECTION-2026',
-  associes:   'ASSOCIES-2026',
-  qualite:    'QUALITE-2026',
-  agent:      'AGENT-2026'
+   mais CE N'EST PAS UNE SÉCURITÉ INFORMATIQUE : quiconque sait ouvrir la console
+   du navigateur (F12) peut exécuter `currentRole='superadmin'; applyRolePermissions();`
+   et contourner entièrement cet écran. Pour une vraie protection de données sensibles,
+   il faut un serveur avec authentification réelle (voir note de sécurité fournie).
+   Les codes ne sont plus stockés en clair mais en empreinte SHA-256 (non réversible
+   à la simple lecture du code source — mais toujours contournable via la console).
+   → Pour changer un code : ouvrez la console du navigateur et exécutez
+     crypto.subtle.digest('SHA-256', new TextEncoder().encode('MON-NOUVEAU-CODE'))
+       .then(b=>console.log(Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')))
+     puis collez le résultat ci-dessous à la place du hash correspondant. */
+const ROLE_CODE_HASHES = {
+  superadmin: 'aef41367427d6061c8ab191f263dcf0ed40de4e96a5c22cc548d17fd4549b0cb', // SUPER-2026
+  directeur:  '860d72cfe36e939072592263bb45fe06fb8865c93e8b528fb07814788407779c', // DIRECTION-2026
+  associes:   '6e0131726026bc076bb2914f5c1fb6541dd4bf6559be6d351209416413322db6', // ASSOCIES-2026
+  qualite:    'e56f28e0ed0dea773a5cfd69d4099f91c79a8b5f529dd47793a76aa8b8f4e055', // QUALITE-2026
+  agent:      'a5205dc5bc2d999a16f59c5f3d4fedc6d69ac0989d755d41eef71c04389eb38e'  // AGENT-2026
 };
+async function sha256Hex(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(x=>x.toString(16).padStart(2,'0')).join('');
+}
 const ROLE_LABELS = {
   superadmin:'Super Admin', directeur:'Directeur', associes:'Associés', qualite:'Qualité', agent:'Agent'
 };
@@ -344,6 +359,10 @@ let currentRole = null;
 let currentAgentName = null;
 function canEditFinance(){ return currentRole && PERM[currentRole].editFinance; }
 function canEditQuality(){ return currentRole && PERM[currentRole].editQuality; }
+
+// --- anti-brute-force basique : ralentit les essais répétés (dissuasion, pas une protection réelle) ---
+let failedAttempts = 0;
+let lockedUntil = 0;
 
 let selectedRole = null;
 document.querySelectorAll('.role-btn').forEach(b=>{
@@ -367,11 +386,27 @@ document.getElementById('loginBack').addEventListener('click', ()=>{
 document.getElementById('loginSubmit').addEventListener('click', doLogin);
 document.getElementById('loginCode').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 
-function doLogin(){
+async function doLogin(){
   const err = document.getElementById('loginError');
+  if(Date.now() < lockedUntil){
+    err.textContent = `Trop d'essais — réessayez dans ${Math.ceil((lockedUntil-Date.now())/1000)}s.`;
+    return;
+  }
   if(!selectedRole){ err.textContent = 'Sélectionnez un profil.'; return; }
   const code = document.getElementById('loginCode').value.trim();
-  if(code !== ROLE_CODES[selectedRole]){ err.textContent = 'Code incorrect.'; return; }
+  const hash = await sha256Hex(code);
+  if(hash !== ROLE_CODE_HASHES[selectedRole]){
+    failedAttempts++;
+    if(failedAttempts>=5){
+      lockedUntil = Date.now() + 30000;
+      failedAttempts = 0;
+      err.textContent = 'Trop d\'essais — verrouillé 30 secondes.';
+    } else {
+      err.textContent = `Code incorrect (${failedAttempts}/5).`;
+    }
+    return;
+  }
+  failedAttempts = 0;
   if(selectedRole==='agent'){
     const nom = document.getElementById('agentNameInput').value.trim();
     if(!nom){ err.textContent = 'Indiquez votre nom.'; return; }
@@ -382,13 +417,33 @@ function doLogin(){
   document.getElementById('appRoot').style.display = 'block';
   document.getElementById('roleBadge').textContent = ROLE_LABELS[currentRole] + (currentAgentName ? ' · '+currentAgentName : '');
   applyRolePermissions();
+  resetInactivityTimer();
 }
-document.getElementById('logoutBtn').addEventListener('click', ()=>{
+function doLogout(reason){
   currentRole = null; currentAgentName = null; selectedRole = null;
+  // purge des données sensibles chargées en mémoire pour cette session
+  rawLignes = []; overrides = {};
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('loginOverlay').style.display = 'flex';
   document.getElementById('loginStep2').style.display = 'none';
   document.querySelectorAll('.role-btn').forEach(x=>x.classList.remove('selected'));
+  document.getElementById('fileInput').value = '';
+  document.getElementById('sheetSelector').innerHTML = '<option value="">Feuille…</option>';
+  if(reason) setTimeout(()=>{ const e=document.getElementById('loginError'); if(e) e.textContent = reason; }, 50);
+  clearTimeout(inactivityTimer);
+}
+document.getElementById('logoutBtn').addEventListener('click', ()=> doLogout());
+
+// --- déconnexion automatique après inactivité (protège les postes partagés/non surveillés) ---
+const INACTIVITY_LIMIT_MS = 15*60*1000; // 15 minutes
+let inactivityTimer = null;
+function resetInactivityTimer(){
+  clearTimeout(inactivityTimer);
+  if(!currentRole) return;
+  inactivityTimer = setTimeout(()=> doLogout('Session expirée après 15 minutes d\'inactivité — reconnectez-vous.'), INACTIVITY_LIMIT_MS);
+}
+['click','keydown','mousemove','touchstart','scroll'].forEach(evt=>{
+  document.addEventListener(evt, ()=>{ if(currentRole) resetInactivityTimer(); }, {passive:true});
 });
 
 function applyRolePermissions(){
