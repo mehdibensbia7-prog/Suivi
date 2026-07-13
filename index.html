@@ -2,92 +2,87 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>SIPP - Dashboard Management</title>
+    <title>SIPP - Pilotage Intégral</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
     <style>
-        body { font-family: sans-serif; background: #1a1a2e; color: #fff; padding: 20px; }
-        .nav { display: flex; gap: 10px; margin-bottom: 20px; }
-        .tab-content { display: none; padding: 20px; background: #16213e; border-radius: 12px; }
-        .active { display: block; }
-        button { padding: 10px 20px; cursor: pointer; background: #3498db; border: none; border-radius: 5px; color: white; }
+        body { background: #0f172a; color: #e2e8f0; font-family: sans-serif; padding: 20px; }
+        .summary-box { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px; padding: 20px; background: #1e293b; border-radius: 10px; border: 1px solid #3498db; }
+        .stat { font-size: 1.4em; font-weight: bold; color: #3498db; }
+        .error { color: #f87171; font-weight: bold; margin-bottom: 10px; }
     </style>
 </head>
 <body>
-
-    <div class="nav">
-        <button onclick="showTab('suivi')">Suivi & Édition</button>
-        <button onclick="showTab('kpi')">KPI Performance</button>
+    <h1>SIPP - Gestion Financière & Performance</h1>
+    <div class="summary-box">
+        <div>MINT à Payer : <span id="mint-apayer" class="stat">0 DH</span></div>
+        <div>CONSO à Payer : <span id="conso-apayer" class="stat">0 DH</span></div>
+        <div>Total Payé : <span id="total-paye" class="stat">0 DH</span></div>
     </div>
 
-    <div id="suivi" class="tab-content active">
-        <input type="file" id="fileInput" />
-        <select id="sheetSelector" onchange="loadSheet()"><option value="">Choisir une feuille</option></select>
-        <button onclick="saveModifications()">Sauvegarder</button>
-        <div id="table-container" style="margin-top:20px; min-height: 200px;"></div>
-    </div>
-
-    <div id="kpi" class="tab-content">
-        <h2>Analyse Performance</h2>
-        <div id="kpi-container" style="min-height: 200px;"></div>
-    </div>
+    <input type="file" id="fileInput" accept=".xlsx" />
+    <div id="error-msg" class="error"></div>
+    <div id="table-paie" style="margin-top:20px;"></div>
 
     <script>
-        let workbook = null;
-
-        function showTab(id) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.getElementById(id).classList.add('active');
-        }
+        let table;
 
         document.getElementById('fileInput').addEventListener('change', function(e) {
-            const file = e.target.files[0];
             const reader = new FileReader();
-            reader.onload = function(ev) {
+            reader.onload = (ev) => {
                 try {
-                    const data = new Uint8Array(ev.target.result);
-                    workbook = XLSX.read(data, {type: 'array'});
-                    const s = document.getElementById('sheetSelector');
-                    s.innerHTML = '<option value="">Choisir une feuille</option>';
-                    workbook.SheetNames.forEach(n => {
-                        let opt = document.createElement('option');
-                        opt.value = n; opt.innerHTML = n;
-                        s.appendChild(opt);
+                    const wb = XLSX.read(new Uint8Array(ev.target.result), {type: 'array'});
+                    const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+                    
+                    const processed = data.map(r => {
+                        let status = String(r['Status'] || "").toLowerCase();
+                        let date = moment(r['Date de Vente'], 'DD/MM/YYYY');
+                        
+                        // Calculs MINT
+                        let mintQty = (String(r['Numéro Contrat Energie'] || "").match(/\d{7}/g) || []).length;
+                        let mintComm = (mintQty * 50) + (status === 'activé' ? 150 : 0) - (['annulé', 'rétracté', 'résilié'].includes(status) ? 150 : 0);
+                        
+                        // Calculs CONSO
+                        let isConso = String(r['Numéro Contrat ConsoPilote'] || "").trim() !== "";
+                        let consoComm = isConso ? (100 + (moment().diff(date, 'months') >= 1 ? 50 : 0) + (moment().diff(date, 'months') >= 2 ? 50 : 0)) : 0;
+                        
+                        return {
+                            ...r,
+                            Montant_Mint: mintComm,
+                            Montant_Conso: consoComm,
+                            Etat_Mint: "Non Payé",
+                            Etat_Conso: "Non Payé"
+                        };
                     });
-                    alert("Fichier chargé avec succès !");
-                } catch(err) { alert("Erreur lecture fichier : " + err); }
+
+                    table = new Tabulator("#table-paie", {
+                        data: processed,
+                        columns: [
+                            {title: "Agent", field: "Nom du Commercial"},
+                            {title: "MINT", field: "Montant_Mint", hozAlign: "center"},
+                            {title: "Statut MINT", field: "Etat_Mint", editor: "select", editorParams: {values: ["Non Payé", "Payé"]}},
+                            {title: "CONSO", field: "Montant_Conso", hozAlign: "center"},
+                            {title: "Statut CONSO", field: "Etat_Conso", editor: "select", editorParams: {values: ["Non Payé", "Payé"]}},
+                        ],
+                        cellEdited: updateBalance
+                    });
+                    updateBalance();
+                } catch(err) { document.getElementById('error-msg').innerText = "Erreur de traitement : " + err.message; }
             };
-            reader.readAsArrayBuffer(file);
+            reader.readAsArrayBuffer(e.target.files[0]);
         });
 
-        function loadSheet() {
-            const name = document.getElementById('sheetSelector').value;
-            if(!name) return;
-            const data = XLSX.utils.sheet_to_json(workbook.Sheets[name]);
-            
-            // Initialisation forcée
-            const table = new Tabulator("#table-container", {
-                data: data,
-                autoColumns: true,
-                layout: "fitColumns"
+        function updateBalance() {
+            let m = 0, c = 0, p = 0;
+            table.getData().forEach(row => {
+                if (row.Etat_Mint === "Non Payé") m += row.Montant_Mint; else p += row.Montant_Mint;
+                if (row.Etat_Conso === "Non Payé") c += row.Montant_Conso; else p += row.Montant_Conso;
             });
-
-            // Calcul KPI
-            const kpi = data.reduce((acc, row) => {
-                let ag = row['Nom du Commercial'];
-                if(!ag) return acc;
-                if(!acc[ag]) acc[ag] = {Agent: ag, Ventes: 0, Annulations: 0};
-                acc[ag].Ventes++;
-                if(row['Status'] === 'Annulé') acc[ag].Annulations++;
-                return acc;
-            }, {});
-            
-            new Tabulator("#kpi-container", { data: Object.values(kpi), autoColumns: true });
-        }
-
-        function saveModifications() {
-            alert("Sauvegarde lancée...");
+            document.getElementById('mint-apayer').innerText = m + " DH";
+            document.getElementById('conso-apayer').innerText = c + " DH";
+            document.getElementById('total-paye').innerText = p + " DH";
         }
     </script>
 </body>
