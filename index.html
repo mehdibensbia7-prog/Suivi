@@ -2,49 +2,89 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>SIPP - MINT & ConsoPilote</title>
+    <title>SIPP - Dashboard Management</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
     <style>
-        body { font-family: sans-serif; background: #1a1a2e; color: white; padding: 20px; }
-        .grid-container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .card { background: #16213e; padding: 20px; border-radius: 10px; }
+        body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; padding: 20px; }
+        .nav { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab-content { display: none; padding: 20px; background: #16213e; border-radius: 12px; }
+        .active { display: block; }
+        button { padding: 10px 20px; cursor: pointer; background: #3498db; border: none; border-radius: 5px; color: white; }
     </style>
 </head>
 <body>
-    <h1>Pilotage de Performance Opérationnelle</h1>
-    <div class="card">
-        <input type="file" id="fileInput" accept=".xlsx" />
-        <button onclick="calculateCommissions()">Générer Paie & Commissions</button>
+
+    <div class="nav">
+        <button onclick="showTab('suivi')">Suivi & Édition</button>
+        <button onclick="showTab('kpi')">KPI Performance</button>
     </div>
-    <div class="grid-container" style="margin-top:20px;">
-        <div id="suivi-container" class="card"><h2>Suivi Ventes</h2></div>
-        <div id="finance-container" class="card"><h2>Synthèse Financière</h2></div>
+
+    <!-- Onglet Suivi -->
+    <div id="suivi" class="tab-content active">
+        <input type="file" id="fileInput" accept=".xlsx" />
+        <select id="sheetSelector" onchange="loadSheet()"></select>
+        <button onclick="saveModifications()">Sauvegarder les modifs</button>
+        <div id="table-container" style="margin-top:20px;"></div>
+    </div>
+
+    <!-- Onglet KPI -->
+    <div id="kpi" class="tab-content">
+        <h2>Analyse Taux de Chute & Activation</h2>
+        <div id="kpi-container"></div>
     </div>
 
     <script>
-        let tableVentes, tableFinance;
+        let workbook = null;
+        let table = null;
 
-        function calculateCommissions() {
-            const file = document.getElementById('fileInput').files[0];
+        function showTab(id) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
             const reader = new FileReader();
-            reader.onload = (e) => {
-                const data = new Uint8Array(e.target.result);
-                const wb = XLSX.read(data, {type: 'array'});
-                let ventes = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-                
-                // Moteur de calcul simple pour la démonstration
-                let finance = ventes.map(v => {
-                    let type = v['Type de Contrat'] || "";
-                    let commission = (type.includes('Mint')) ? 50 : 100;
-                    return { Agent: v['Nom du Commercial'], Type: type, Commission: commission };
-                });
-
-                tableVentes = new Tabulator("#suivi-container", {data: ventes, autoColumns: true});
-                tableFinance = new Tabulator("#finance-container", {data: finance, autoColumns: true});
+            reader.onload = (ev) => {
+                workbook = XLSX.read(new Uint8Array(ev.target.result), {type: 'array'});
+                const s = document.getElementById('sheetSelector');
+                workbook.SheetNames.forEach(n => s.innerHTML += `<option value="${n}">${n}</option>`);
             };
-            reader.readAsArrayBuffer(file);
+            reader.readAsArrayBuffer(e.target.files[0]);
+        });
+
+        function loadSheet() {
+            const data = XLSX.utils.sheet_to_json(workbook.Sheets[document.getElementById('sheetSelector').value]);
+            table = new Tabulator("#table-container", { data: data, autoColumns: true, editor: "input" });
+            
+            // Calcul KPI simplifiés
+            const kpiData = data.reduce((acc, row) => {
+                let agent = row['Nom du Commercial'];
+                if(!acc[agent]) acc[agent] = {Agent: agent, Ventes: 0, Annulations: 0};
+                acc[agent].Ventes++;
+                if(row['Status'] === 'Annulé') acc[agent].Annulations++;
+                return acc;
+            }, {});
+            
+            new Tabulator("#kpi-container", {
+                data: Object.values(kpiData),
+                columns: [
+                    {title: "Agent", field: "Agent"},
+                    {title: "Total Ventes", field: "Ventes"},
+                    {title: "Annulations", field: "Annulations"},
+                    {title: "Taux de Chute (%)", formatter: function(cell){
+                        let d = cell.getRow().getData();
+                        return ((d.Annulations/d.Ventes)*100).toFixed(2) + "%";
+                    }}
+                ]
+            });
+        }
+
+        function saveModifications() {
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(table.getData()), "Export");
+            XLSX.writeFile(wb, "Suivi_MINT_KPI.xlsx");
         }
     </script>
 </body>
