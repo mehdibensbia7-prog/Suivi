@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
     <meta charset="UTF-8">
     <title>Centre d'Appel - Gestion Ventes</title>
@@ -7,28 +7,30 @@
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
     <style>
-        body { font-family: sans-serif; padding: 20px; background: #f4f4f9; }
-        .nav { margin-bottom: 20px; }
-        .tab-content { display: none; padding: 20px; background: #fff; border: 1px solid #ccc; }
+        body { font-family: 'Segoe UI', sans-serif; padding: 20px; background: #f0f2f5; }
+        .nav { margin-bottom: 20px; display: flex; gap: 10px; }
+        .tab-content { display: none; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .active { display: block; }
+        #table-container { margin-top: 20px; min-height: 300px; }
     </style>
 </head>
 <body>
 
     <div class="nav">
-        <button onclick="showTab('suivi')">Suivi des Ventes</button>
-        <button onclick="showTab('convert')">Importer Fichier</button>
+        <button onclick="showTab('suivi')">Onglet 1 : Suivi des Ventes</button>
+        <button onclick="showTab('convert')">Onglet 2 : Importation</button>
     </div>
 
     <div id="suivi" class="tab-content active">
-        <h2>Suivi des Ventes</h2>
+        <h2>Tableau de Bord de Suivi</h2>
         <div id="table-container"></div>
     </div>
 
     <div id="convert" class="tab-content">
-        <h2>Importer (Excel ou PDF)</h2>
+        <h2>Charger vos fichiers</h2>
         <input type="file" id="fileInput" accept=".xlsx,.xls,.pdf" />
-        <button onclick="processFile()">Charger dans Suivi</button>
+        <button onclick="processFile()">Charger les données</button>
+        <p><small>Note : Utilisez un fichier Excel pour une lecture directe. Les PDF seront lus sous forme de texte brut.</small></p>
     </div>
 
     <script>
@@ -38,10 +40,14 @@
         }
 
         function initTable(data) {
+            const container = document.getElementById('table-container');
+            container.innerHTML = ""; // Nettoyage
             new Tabulator("#table-container", {
                 data: data,
                 autoColumns: true,
                 layout: "fitColumns",
+                pagination: "local",
+                paginationSize: 20,
                 columnDefaults: { editor: "input", bottomCalc: "sum" }
             });
             showTab('suivi');
@@ -49,14 +55,18 @@
 
         function processFile() {
             const file = document.getElementById('fileInput').files[0];
-            if (!file) return alert("Sélectionnez un fichier");
+            if (!file) return alert("Veuillez sélectionner un fichier.");
 
             const reader = new FileReader();
             reader.onload = function(e) {
-                const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, {type: 'array'});
-                const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
-                initTable(jsonData);
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, {type: 'array'});
+                    const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                    initTable(jsonData);
+                } catch (err) {
+                    alert("Erreur : Le fichier n'est pas un format Excel valide.");
+                }
             };
             reader.readAsArrayBuffer(file);
         }
