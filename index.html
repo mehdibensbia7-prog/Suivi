@@ -366,6 +366,34 @@
   </div>
 </div>
 
+<!-- Modal import session choice -->
+<div id="importSessionModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideImportSessionModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Choisir le mode d'import</h3>
+      <p>Souhaitez-vous fusionner les nouvelles données dans la session actuelle, ou ouvrir une nouvelle session isolée ?</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" id="importContinueBtn">Poursuivre la session en cours</button>
+        <button class="btn primary" id="importNewBtn">Ouvrir une nouvelle session</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal import summary -->
+<div id="importSummaryModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideImportSummaryModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Résumé de l'import</h3>
+      <div id="importSummaryContent" style="font-family:var(--mono);font-size:13px;color:var(--ink-dim)"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" onclick="hideImportSummaryModal()">Fermer</button>
+        <button class="btn primary" id="downloadImportReportBtn">Télécharger le rapport</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <footer>SIPP v1 — moteur de calcul 100% client-side (aucune donnée envoyée à un serveur). Règles de commissionnement : voir cahier des charges.</footer>
 
 <script>
@@ -374,6 +402,8 @@ let workbooks = [];
 let rawLignes = [];       // toutes les lignes-contrat calculées (MINT + CONSO)
 let overrides = {};       // { lineId: { statutPaiementBrut, statutPaiementActivation, datePaiementBrut, decommissionManuel, motifQualite, statutPaiement (CONSO) } }
 let tSuivi, tFinance, tKPI, tAlertes, tQualite, tMesVentes, tMesVentesSemaine, tMesVentesMois;
+let pendingWorkbooks = null;
+let sippDB = null;
 
 const STATUTS_CHUTE = ['annulee','annule','retractee','retracte','resilie','resiliee','refuse','refusee'];
 const norm = s => (s==null?'':String(s)).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
@@ -474,6 +504,7 @@ async function doLogin(){
   document.getElementById('appRoot').style.display = 'block';
   document.getElementById('roleBadge').textContent = ROLE_LABELS[currentRole] + (currentAgentName ? ' · '+currentAgentName : '');
   applyRolePermissions();
+  try{ await openSippDB(); }catch(e){ console.warn('IndexedDB non disponible :', e); }
   resetInactivityTimer();
 }
 function doLogout(reason){
@@ -602,8 +633,10 @@ document.getElementById('fileInput').addEventListener('change', function(e){
       if(workbooks.length && workbooks[0].workbook.SheetNames.length){
         sel.value = workbooks[0].fileName + '||' + workbooks[0].workbook.SheetNames[0];
       }
-      autoDetectAndProcess();
-      setStatus('Fichiers chargés : '+workbooks.map(w=>w.fileName).join(', '), 'ok');
+      // delay processing until user chooses session behaviour
+      pendingWorkbooks = results;
+      showImportSessionModal();
+      setStatus('Fichiers prêts — en attente du choix de session d\'import.', 'warn');
     })
     .catch(err => {
       workbooks = [];
@@ -619,6 +652,42 @@ document.getElementById('fileInput').addEventListener('change', function(e){
 document.getElementById('sheetSelector').addEventListener('change', ()=>{
   const fullKey = document.getElementById('sheetSelector').value;
   if(fullKey) renderRawSheetPreview(fullKey);
+});
+
+// handlers for import session modal
+document.getElementById('importContinueBtn').addEventListener('click', async ()=>{
+  hideImportSessionModal();
+  await openSippDB();
+  let sess = getCurrentSessionId();
+  if(!sess){ const meta = await createSession('Session ' + new Date().toLocaleString()); sess = meta.id; }
+  workbooks = pendingWorkbooks; pendingWorkbooks = null;
+  try{ autoDetectAndProcess();
+    const report = await persistUpsert(sess);
+    document.getElementById('importSummaryContent').textContent = JSON.stringify(report,null,2);
+    showImportSummaryModal();
+    setStatus(`Import fusionné dans la session (${sess}) — ${report.added} ajoutées, ${report.updated} mises à jour, ${report.ignored} ignorées.`, 'ok');
+  }catch(e){ showError('Erreur après import: '+e.message); setStatus('Erreur import','error'); }
+});
+
+document.getElementById('importNewBtn').addEventListener('click', async ()=>{
+  hideImportSessionModal();
+  await openSippDB();
+  const meta = await createSession('Session ' + new Date().toLocaleString());
+  const sess = meta.id;
+  workbooks = pendingWorkbooks; pendingWorkbooks = null;
+  try{ autoDetectAndProcess();
+    const report = await persistUpsert(sess);
+    document.getElementById('importSummaryContent').textContent = JSON.stringify(report,null,2);
+    showImportSummaryModal();
+    setStatus(`Nouvelle session créée (${sess}) — ${report.added} ajoutées, ${report.updated} mises à jour, ${report.ignored} ignorées.`, 'ok');
+  }catch(e){ showError('Erreur après import: '+e.message); setStatus('Erreur import','error'); }
+});
+
+// download report
+document.getElementById('downloadImportReportBtn').addEventListener('click', ()=>{
+  const txt = document.getElementById('importSummaryContent').textContent || '{}';
+  const blob = new Blob([txt],{type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'import_report_'+new Date().toISOString().slice(0,10)+'.json'; a.click();
 });
 
 /* ============================= DÉTECTION DES 2 TABLES (sur tout le classeur) ============================= */
@@ -880,6 +949,115 @@ function setOverride(id, key, value){
   if(line) line[key] = value;
   return line;
 }
+
+/* ============================= PERSISTENCE (IndexedDB) ============================= */
+function openSippDB(){
+  return new Promise((resolve,reject)=>{
+    if(sippDB) return resolve(sippDB);
+    const req = indexedDB.open('sipp-db', 1);
+    req.onupgradeneeded = ev => {
+      const db = ev.target.result;
+      if(!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions',{keyPath:'id'});
+      if(!db.objectStoreNames.contains('lignes')) db.createObjectStore('lignes',{keyPath:'key'});
+      if(!db.objectStoreNames.contains('audit')) db.createObjectStore('audit',{autoIncrement:true});
+    };
+    req.onsuccess = ev => { sippDB = ev.target.result; resolve(sippDB); };
+    req.onerror = ev => reject(ev.target.error);
+  });
+}
+
+function createSession(name){
+  const id = 'sess-'+Date.now();
+  const meta = {id, name:name||('Session '+new Date().toLocaleString()), createdAt:new Date().toISOString(), createdBy: currentRole||'unknown'};
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['sessions'],'readwrite');
+    const store = tx.objectStore('sessions');
+    store.put(meta);
+    tx.oncomplete = ()=>{ localStorage.setItem('sipp.currentSessionId', id); resolve(meta); };
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+
+function getCurrentSessionId(){ return localStorage.getItem('sipp.currentSessionId') || null; }
+function setCurrentSessionId(id){ localStorage.setItem('sipp.currentSessionId', id); }
+
+function getAllLignesForSession(sessionId){
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['lignes'],'readonly');
+    const store = tx.objectStore('lignes');
+    const items = [];
+    const req = store.openCursor();
+    req.onsuccess = ev => {
+      const cur = ev.target.result;
+      if(!cur){ resolve(items.filter(i=>i.sessionId===sessionId)); return; }
+      items.push(cur.value); cur.continue();
+    };
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+function putLigneObject(obj){
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['lignes'],'readwrite');
+    tx.objectStore('lignes').put(obj);
+    tx.oncomplete = ()=> resolve(true);
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+
+function auditRecord(rec){
+  try{
+    const tx = sippDB.transaction(['audit'],'readwrite');
+    tx.objectStore('audit').add(rec);
+  }catch(e){ console.warn('Audit failed',e); }
+}
+
+async function persistUpsert(sessionId){
+  if(!sippDB) await openSippDB();
+  const stored = await getAllLignesForSession(sessionId);
+  const map = {};
+  stored.forEach(s=> map[s.key] = s);
+  const incoming = rawLignes || [];
+  let added=0, updated=0, ignored=0;
+  const details = [];
+  for(const line of incoming){
+    const key = sessionId+'::'+line.contrat+'::'+line.type;
+    const existing = map[key];
+    if(existing){
+      // compare fields
+      const changed = {};
+      ['agent','client','statutCRM','statutPaiementBrut','statutPaiementActivation','datePaiementBrut','decommissionne','net'].forEach(f=>{
+        const a = existing[f]===undefined?null:existing[f];
+        const b = line[f]===undefined?null:line[f];
+        if(String(a) !== String(b)) changed[f] = {from:a, to:b};
+      });
+      if(Object.keys(changed).length){
+        const obj = Object.assign({}, line, {sessionId, key});
+        await putLigneObject(obj);
+        updated++;
+        details.push({contract:line.contrat, action:'update', changes:changed});
+        auditRecord({sessionId, entityKey:key, action:'update', user:currentRole||'unknown', agent:currentAgentName||null, timestamp:new Date().toISOString(), before:existing, after:line});
+      } else {
+        ignored++;
+      }
+    } else {
+      const obj = Object.assign({}, line, {sessionId, key});
+      await putLigneObject(obj);
+      added++;
+      details.push({contract:line.contrat, action:'insert'});
+      auditRecord({sessionId, entityKey:key, action:'insert', user:currentRole||'unknown', agent:currentAgentName||null, timestamp:new Date().toISOString(), before:null, after:line});
+    }
+  }
+  // summary
+  const report = {sessionId, generatedAt:new Date().toISOString(), totalAnalyzed:incoming.length, added, updated, ignored, details};
+  return report;
+}
+
+function showImportSessionModal(){ document.getElementById('importSessionModal').style.display='block'; }
+function hideImportSessionModal(e){ document.getElementById('importSessionModal').style.display='none'; }
+function showImportSummaryModal(){ document.getElementById('importSummaryModal').style.display='block'; }
+function hideImportSummaryModal(e){ document.getElementById('importSummaryModal').style.display='none'; }
+
 
 /* ============================= MOTEUR DE CALCUL ============================= */
 function parsePaymentFlag(val){
