@@ -217,6 +217,13 @@
 </header>
 <div class="confidential-banner">🔒 Données confidentielles — usage interne uniquement. Ne jamais partager le fichier importé, l'export d'état (.json) ou l'export trésorerie (.xlsx) hors de l'entreprise.</div>
 
+<!-- Auto-run startup notice (visible when auto-run enabled and not suppressed) -->
+<div id="autoRunNotice" style="display:none;background:linear-gradient(90deg,#0e3826,#0b2b1b);border:1px solid #1f8f60;color:var(--mint);padding:12px 16px;margin:12px 28px;border-radius:8px;font-size:13px;position:relative;">
+  <div style="font-weight:700">Info — Auto‑run activé</div>
+  <div style="color:var(--ink-dim);margin-top:6px">Les tests d'import s'exécuteront automatiquement après chaque import. <label style="margin-left:8px;font-weight:500;color:var(--ink-dim);font-size:12px"><input type="checkbox" id="autoRunDontShow"> Ne plus afficher</label></div>
+  <button class="btn" id="dismissAutoRunNotice" style="position:absolute;right:12px;top:12px">OK</button>
+</div>
+
 <div class="toolbar" id="mainToolbar">
   <label class="file-btn">Importer un ou plusieurs fichiers .xlsx<input type="file" id="fileInput" accept=".xlsx,.xls" multiple></label>
   <button class="btn" id="sessionsBtn">Sessions</button>
@@ -861,6 +868,19 @@ try{
     setAutoBadge(on);
   });
 }catch(e){ console.warn('Auto-run checkbox init failed', e); }
+
+// show startup notice if auto-run enabled and user hasn't suppressed it
+try{
+  const notice = document.getElementById('autoRunNotice');
+  const dontShow = localStorage.getItem('sipp.autoRunDontShow') === 'true';
+  const enabledNow = localStorage.getItem('sipp.autoRunTests') === 'true';
+  if(notice && enabledNow && !dontShow){ notice.style.display='block'; }
+  const dismiss = document.getElementById('dismissAutoRunNotice');
+  if(dismiss){ dismiss.addEventListener('click', ()=>{
+    const cb = document.getElementById('autoRunDontShow'); if(cb && cb.checked) localStorage.setItem('sipp.autoRunDontShow','true');
+    if(notice) notice.style.display='none';
+  }); }
+}catch(e){ console.warn('autoRun notice init failed', e); }
 
 function appendDiagnostic(level, title, detail){
   try{
