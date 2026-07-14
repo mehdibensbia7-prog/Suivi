@@ -1,0 +1,49 @@
+﻿{
+    "generatedAt":  "2026-07-14T04:59:11.1209473+01:00",
+    "total":  7,
+    "matches":  null,
+    "details":  [
+                    {
+                        "contract":  "1803977",
+                        "expected":  "AnnulÃ©e",
+                        "actual":  "Annulée",
+                        "match":  false
+                    },
+                    {
+                        "contract":  "1804016",
+                        "expected":  "AnnulÃ©e",
+                        "actual":  "Annulée",
+                        "match":  false
+                    },
+                    {
+                        "contract":  "1805035",
+                        "expected":  "AnnulÃ©e",
+                        "actual":  "Annulée",
+                        "match":  false
+                    },
+                    {
+                        "contract":  "1805200",
+                        "expected":  "AnnulÃ©e",
+                        "actual":  "Annulée",
+                        "match":  false
+                    },
+                    {
+                        "contract":  "1805260",
+                        "expected":  "ActivÃ©",
+                        "actual":  "Activé",
+                        "match":  false
+                    },
+                    {
+                        "contract":  "1805322",
+                        "expected":  "AnnulÃ©e",
+                        "actual":  "Annulée",
+                        "match":  false
+                    },
+                    {
+                        "contract":  "1805978",
+                        "expected":  "Introuvable (CRM)",
+                        "actual":  "Introuvable",
+                        "match":  true
+                    }
+                ]
+}

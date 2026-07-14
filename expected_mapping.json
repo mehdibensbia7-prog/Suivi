@@ -1,0 +1,16 @@
+{
+  "generatedAt": "2026-07-14T00:00:00Z",
+  "sourceFiles": [
+    "ASK Call - Suivi de ventes MINT (réponses) (1).xlsx",
+    "tableau statut brut.xlsx"
+  ],
+  "mappings": [
+    { "contract": "1803977", "expectedStatus": "Annulée", "sources": ["ASK Call - Suivi de ventes MINT (réponses) (1).xlsx:SUIVI DES VENTES"] },
+    { "contract": "1804016", "expectedStatus": "Annulée", "sources": ["ASK Call - Suivi de ventes MINT (réponses) (1).xlsx:SUIVI DES VENTES"] },
+    { "contract": "1805035", "expectedStatus": "Annulée", "sources": ["ASK Call - Suivi de ventes MINT (réponses) (1).xlsx:SUIVI DES VENTES"] },
+    { "contract": "1805200", "expectedStatus": "Annulée", "sources": ["ASK Call - Suivi de ventes MINT (réponses) (1).xlsx:SUIVI DES VENTES"] },
+    { "contract": "1805260", "expectedStatus": "Activé", "sources": ["ASK Call - Suivi de ventes MINT (réponses) (1).xlsx:SUIVI DES VENTES"] },
+    { "contract": "1805322", "expectedStatus": "Annulée", "sources": ["ASK Call - Suivi de ventes MINT (réponses) (1).xlsx:SUIVI DES VENTES"] },
+    { "contract": "1805978", "expectedStatus": "Introuvable (CRM)", "sources": ["ASK Call - Suivi de ventes MINT (réponses) (1).xlsx:Réponses au formulaire 1","tableau statut brut.xlsx:Feuil1"] }
+  ]
+}

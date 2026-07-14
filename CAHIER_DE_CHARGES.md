@@ -12,9 +12,11 @@ L'application doit également protéger les règles métier sensibles autour des
 
 ## Exigences Fonctionnelles
 - Charger SheetJS (`XLSX`) depuis le CDN puis basculer automatiquement sur `xlsx.full.min.js` local si le CDN échoue.
+- Supporter l'import simultané de plusieurs fichiers Excel et le rapprochement cross-sheet entre les exports MINT/ConsoPilote et les statuts CRM.
 1. Import de fichiers Excel et parsing des données.
 2. Extraction robuste de l'ID de contrat (5 à 7 chiffres) depuis plusieurs colonnes possibles.
-3. Classification des statuts : payé, annulé, en cours, non payé.
+3. Fusion des données de `Feuil1`, `Feuil2`, `Réponses au formulaire 1`, `SUIVI DES VENTES` et autres exports pertinents.
+4. Classification des statuts : payé, annulé, en cours, non payé.
 4. Protection stricte des contrats déjà marqués "Payé" : impossibilité de modifier le statut brut ou la date de paiement sauf via l'onglet Qualité.
 5. Gestion de l'annulation post-paiement : conserver le montant brut et lever une alerte qualité.
 6. Export des données traitées en JSON et Excel.
@@ -45,3 +47,49 @@ L'application doit également protéger les règles métier sensibles autour des
 ## Références
 - Historique de demandes : `C:\Users\z\OneDrive\Desktop\Historique_Requêtes`
 - Correctifs antérieurs : protection du statut payé, mise à jour des liens CDN, audit complet du projet.
+
+## DOCUMENT DE RÉFÉRENCE : SIPP (Système d'Information de Pilotage de Performance)
+
+### Phase 1 : Historique des demandes (Consolidation des textes)
+- Objectif : Structurer une entité de centre d'appel avec organigramme et framework RH.
+- Logique MINT : Détection des contrats via regex, calcul du brut (50 DH/unité) et net (150 DH/activation).
+- Logic ConsoPilote : Paiements différés (100 DH à la signature, 50 DH à M+1, 50 DH à M+2).
+- Compliance (Clawback) : Décommissionnement automatique (-150 DH) si statut devient "Annulé, Rétracté, Résilié, Refusé".
+- Gestion Opérationnelle : Création de colonnes de statuts éditables dans l'onglet Opérationnel.
+- Trésorerie & Management : Validation unitaire des paiements (MINT/Conso) et dashboard de balance financière.
+- KPI : Analyse de performance et taux de chute par agent.
+- Ergonomie : Interface Midnight, sélecteur de feuilles, gestion d'erreurs, calcul dynamique.
+
+### Phase 2 : Cahier des Charges Intégral
+#### 1. Modules Fonctionnels
+- Import & Lecture : Interface d'importation `.xlsx` avec sélecteur de feuilles.
+- Tableau Opérationnel : Affichage des données sources avec ajout de deux colonnes de statuts éditables (Énergie / Conso).
+- Calculateur Financier :
+  - MINT : (Nb_Unités × 50) + (Activation × 150) - (Clawback × 150).
+  - CONSO : 100 + (M+1 × 50) + (M+2 × 50) (ajusté par date).
+- Module KPI : Synthèse des ventes et des annulations par agent.
+- Trésorerie : Dashboard avec calcul en temps réel du "Reste à Payer" et du "Total Payé".
+
+#### 2. Exigences Techniques
+- Environnement client-side (JS natif + bibliothèques CDN).
+- Design Midnight (Tabulator).
+- Gestion d'erreurs `try/catch` avec affichage immédiat des anomalies.
+
+### Phase 3 : Le Prompt Maître (Protocole d'Exécution)
+Chaque intervention future doit respecter strictement ce protocole :
+1. Audit Global : Lecture intégrale du cahier des charges et du présent prompt.
+2. Analyse Mot-à-Mot : Vérification minutieuse de chaque règle de calcul et de chaque module (KPI, Finance, Trésorerie, Import).
+3. Test de l'Interface & Script : Simulation complète du flux (Import → Choix Feuille → Calcul → Édition Statuts → Balance).
+4. Correction & Intégration : Si une erreur est détectée, la corriger. Si une nouvelle demande est formulée, l'intégrer systématiquement de manière cumulative (interdiction formelle de supprimer une fonctionnalité existante).
+5. Livraison Intégrale : Fournir l'intégralité du code source complet incluant tous les aspects.
+
+### Phase 4 : Document Structuré (Récapitulatif de l'Architecture)
+- HTML : Structure multi-onglets (Opérationnel, Finance, KPI).
+- CSS : Thème sombre professionnel (Midnight).
+- Logic métier (JS) :
+  - `XLSX.js` pour la lecture Excel.
+  - `Date` natif / helpers de date pour la gestion des échéances (M+1, M+2).
+  - `Tabulator.js` pour la manipulation des tableaux, le tri et l'édition granulaire.
+- Dashboard : Mise à jour via la fonction `updateBalance()` déclenchée à chaque modification de statut de paiement par le manager.
+
+> Note de mise en œuvre : Pour toute demande de modification, utilisez le protocole d'exécution ci-dessus afin de garantir que les modules KPI, Sélecteur de feuilles, et la logique de décommissionnement restent en place.
