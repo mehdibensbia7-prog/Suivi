@@ -436,6 +436,14 @@
       <div style="font-size:12px;color:var(--ink-dim);margin-bottom:8px">
         <strong>Info :</strong> Vous pouvez importer un fichier `.json` (session) ou un export chiffré `.enc`. Pour les exports chiffrés, il vous sera demandé une passphrase. Les imports ne modifient pas vos sessions existantes sauf si vous cochez l'option ci‑dessus.
       </div>
+      <div id="sessionsHelpNotice" style="display:none;background:linear-gradient(90deg,#12313a,#0e2630);border:1px solid #2f9aa3;color:var(--ink);padding:10px 12px;margin-bottom:8px;border-radius:8px;font-size:13px;">
+        <div style="font-weight:700">Aide rapide — Gestion des sessions</div>
+        <div style="color:var(--ink-dim);margin-top:6px">Ici vous pouvez créer, importer, exporter, et supprimer des sessions. L'import chiffré demande une passphrase. Les actions sont consignées dans l'audit (IndexedDB).</div>
+        <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between">
+          <label style="font-size:12px;color:var(--ink-dim)"><input type="checkbox" id="sessionsHelpDontShow"> Ne plus afficher</label>
+          <button class="btn" id="dismissSessionsHelpNotice" style="font-size:12px">Fermer</button>
+        </div>
+      </div>
       <div id="sessionsList" style="max-height:45vh;overflow:auto"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
         <button class="btn" onclick="hideSessionsModal()">Fermer</button>
@@ -1288,7 +1296,18 @@ function showImportSummaryModal(){ document.getElementById('importSummaryModal')
 function hideImportSummaryModal(e){ document.getElementById('importSummaryModal').style.display='none'; }
 
 // Sessions modal handlers
-function showSessionsModal(){ document.getElementById('sessionsModal').style.display='block'; loadAndRenderSessions(); }
+function showSessionsModal(){
+  const modal = document.getElementById('sessionsModal');
+  modal.style.display='block';
+  loadAndRenderSessions();
+  try{
+    const suppressed = localStorage.getItem('sipp.sessionsHelpDontShow') === 'true';
+    const note = document.getElementById('sessionsHelpNotice');
+    if(note) note.style.display = suppressed ? 'none' : 'block';
+    const dismiss = document.getElementById('dismissSessionsHelpNotice');
+    if(dismiss){ dismiss.onclick = ()=>{ const cb = document.getElementById('sessionsHelpDontShow'); if(cb && cb.checked) localStorage.setItem('sipp.sessionsHelpDontShow','true'); if(note) note.style.display='none'; }; }
+  }catch(e){ console.warn('sessions help init failed', e); }
+}
 function hideSessionsModal(e){ document.getElementById('sessionsModal').style.display='none'; }
 
 async function getAllSessions(){
