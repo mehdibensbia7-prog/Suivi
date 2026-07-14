@@ -407,6 +407,12 @@
         <label class="btn file-btn" style="background:var(--panel);border:1px solid var(--line);">Importer session chiffrée<input type="file" id="importEncryptedFile" accept=".enc,.json.enc" style="display:none"></label>
         <button class="btn" id="refreshSessionsBtn">Rafraîchir</button>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <input type="checkbox" id="deleteAfterImport" /> <label for="deleteAfterImport" style="font-size:13px;color:var(--ink-dim)">Supprimer la session importée après import</label>
+      </div>
+      <div style="font-size:12px;color:var(--ink-dim);margin-bottom:8px">
+        <strong>Info :</strong> Vous pouvez importer un fichier `.json` (session) ou un export chiffré `.enc`. Pour les exports chiffrés, il vous sera demandé une passphrase. Les imports ne modifient pas vos sessions existantes sauf si vous cochez l'option ci‑dessus.
+      </div>
       <div id="sessionsList" style="max-height:45vh;overflow:auto"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
         <button class="btn" onclick="hideSessionsModal()">Fermer</button>
@@ -756,7 +762,8 @@ document.getElementById('importSessionFile').addEventListener('change', async fu
       if(!(parsed && parsed.salt && parsed.iv && parsed.ct)){ alert('Payload chiffré invalide'); return; }
       const clear = await decryptPayload(parsed, pass);
       const payload = JSON.parse(clear);
-      await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,''), {type:'application/json'}));
+      const newId = await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,''), {type:'application/json'}));
+      if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(payload.meta?payload.meta.name:newId),'ok'); }
       return;
     }
 
@@ -765,7 +772,8 @@ document.getElementById('importSessionFile').addEventListener('change', async fu
     let parsed;
     try{ parsed = JSON.parse(txt); }catch(e){ parsed = null; }
     if(parsed && parsed.meta && parsed.lines){ // plain session JSON
-      await importSessionJSON(new File([txt], f.name, {type:'application/json'}));
+      const newId = await importSessionJSON(new File([txt], f.name, {type:'application/json'}));
+      if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(parsed.meta?parsed.meta.name:newId),'ok'); }
       return;
     }
     // if looks like encrypted payload without .enc extension
@@ -774,12 +782,13 @@ document.getElementById('importSessionFile').addEventListener('change', async fu
       if(!pass) { alert('Passphrase requise'); return; }
       const clear = await decryptPayload(parsed, pass);
       const payload = JSON.parse(clear);
-      await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,'')+'.json', {type:'application/json'}));
+      const newId = await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,'')+'.json', {type:'application/json'}));
+      if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(payload.meta?payload.meta.name:newId),'ok'); }
       return;
     }
 
     // fallback: try to parse as session JSON raw
-    try{ const payload = JSON.parse(txt); await importSessionJSON(new File([JSON.stringify(payload)], f.name, {type:'application/json'})); }catch(err){ alert('Fichier d\'import invalide'); }
+    try{ const payload = JSON.parse(txt); const newId = await importSessionJSON(new File([JSON.stringify(payload)], f.name, {type:'application/json'})); if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(payload.meta?payload.meta.name:newId),'ok'); } }catch(err){ alert('Fichier d\'import invalide'); }
   }catch(e){ alert('Erreur import: '+e.message); }
 });
 
@@ -793,7 +802,8 @@ document.getElementById('importEncryptedFile').addEventListener('change', async 
     const pass = prompt('Passphrase pour déchiffrer l\'import chiffré'); if(!pass) { alert('Passphrase requise'); return; }
     const clear = await decryptPayload(parsed, pass);
     const payload = JSON.parse(clear);
-    await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,''), {type:'application/json'}));
+    const newId = await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,''), {type:'application/json'}));
+    if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(payload.meta?payload.meta.name:newId),'ok'); }
   }catch(e){ alert('Erreur import chiffré: '+e.message); }
 });
 
@@ -1239,9 +1249,25 @@ async function exportSessionById(id){ await openSippDB(); const sessTx = sippDB.
  };
 }
 
-async function importSessionJSON(file){ const txt = await file.text(); try{ const payload = JSON.parse(txt); await openSippDB(); if(payload.meta) { const meta = payload.meta; const id = meta.id || ('sess-import-'+Date.now()); // ensure unique id
-    const tx = sippDB.transaction(['sessions','lignes'],'readwrite'); tx.objectStore('sessions').put(Object.assign({},meta,{id})); const store = tx.objectStore('lignes'); (payload.lines||[]).forEach(l=>{ l.sessionId = id; l.key = id+'::'+l.contrat+'::'+l.type; store.put(l); }); tx.oncomplete = ()=>{ setCurrentSessionId(id); setStatus('Session importée: '+(meta.name||id),'ok'); loadAndRenderSessions(); }; }
- }catch(e){ alert('Import invalide: '+e.message); }
+async function importSessionJSON(file){
+  const txt = await file.text();
+  try{
+    const payload = JSON.parse(txt);
+    await openSippDB();
+    if(payload.meta){
+      const meta = payload.meta;
+      const id = meta.id || ('sess-import-'+Date.now()); // ensure unique id
+      return new Promise((resolve,reject)=>{
+        const tx = sippDB.transaction(['sessions','lignes'],'readwrite');
+        tx.objectStore('sessions').put(Object.assign({},meta,{id}));
+        const store = tx.objectStore('lignes');
+        (payload.lines||[]).forEach(l=>{ l.sessionId = id; l.key = id+'::'+l.contrat+'::'+l.type; store.put(l); });
+        tx.oncomplete = ()=>{ setCurrentSessionId(id); setStatus('Session importée: '+(meta.name||id),'ok'); loadAndRenderSessions(); resolve(id); };
+        tx.onerror = ()=> reject(tx.error);
+      });
+    }
+    throw new Error('Payload invalide (meta manquant)');
+  }catch(e){ alert('Import invalide: '+e.message); return null; }
 }
 
 // simple encryption POC using WebCrypto
