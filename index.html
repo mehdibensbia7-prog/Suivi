@@ -229,6 +229,7 @@
   <button class="btn" id="exportAuditBtn">Exporter audit</button>
   <span id="status-msg"></span>
   <span id="status-badge" class="status-badge" style="display:none"></span>
+  <span id="autoRunBadge" class="status-badge" style="display:none"></span>
 </div>
 
 <!-- Diagnostics log -->
@@ -842,13 +843,19 @@ document.getElementById('runImportTestsBtn').addEventListener('click', async ()=
   }catch(e){ appendDiagnostic('error','Erreur tests', String(e)); }
 });
 
-// initialize auto-run checkbox state and listener
+// initialize auto-run checkbox state and listener + visible badge
 try{
   const autoChk = document.getElementById('autoRunTestsCheckbox');
-  if(localStorage.getItem('sipp.autoRunTests') === 'true') autoChk.checked = true;
+  const autoBadge = document.getElementById('autoRunBadge');
+  function setAutoBadge(on){ if(!autoBadge) return; if(on){ autoBadge.textContent = 'Auto-run: ON'; autoBadge.className='status-badge ok'; autoBadge.style.display='inline-flex'; } else { autoBadge.style.display='none'; } }
+  const enabled = localStorage.getItem('sipp.autoRunTests') === 'true';
+  autoChk.checked = enabled;
+  setAutoBadge(enabled);
   autoChk.addEventListener('change', function(){
-    localStorage.setItem('sipp.autoRunTests', this.checked ? 'true' : 'false');
-    appendDiagnostic('info','Auto-run tests', this.checked ? 'Activé' : 'Désactivé');
+    const on = this.checked;
+    localStorage.setItem('sipp.autoRunTests', on ? 'true' : 'false');
+    appendDiagnostic('info','Auto-run tests', on ? 'Activé' : 'Désactivé');
+    setAutoBadge(on);
   });
 }catch(e){ console.warn('Auto-run checkbox init failed', e); }
 
