@@ -744,6 +744,22 @@ document.getElementById('createSessionBtn').addEventListener('click', async ()=>
 document.getElementById('importSessionFile').addEventListener('change', async function(e){
   const f = this.files[0]; if(!f) return; this.value='';
   try{
+    // If file looks encrypted by extension, ask passphrase first
+    const name = (f.name||'').toLowerCase();
+    if(/\.enc$/.test(name) || /\.json\.enc$/.test(name)){
+      const pass = prompt('Passphrase pour déchiffrer l\'import (.enc)');
+      if(!pass){ alert('Passphrase requise'); return; }
+      const txt = await f.text();
+      let parsed;
+      try{ parsed = JSON.parse(txt); }catch(e){ alert('Fichier .enc invalide (JSON attendu)'); return; }
+      if(!(parsed && parsed.salt && parsed.iv && parsed.ct)){ alert('Payload chiffré invalide'); return; }
+      const clear = await decryptPayload(parsed, pass);
+      const payload = JSON.parse(clear);
+      await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,''), {type:'application/json'}));
+      return;
+    }
+
+    // Not .enc: read and inspect content
     const txt = await f.text();
     let parsed;
     try{ parsed = JSON.parse(txt); }catch(e){ parsed = null; }
@@ -751,16 +767,16 @@ document.getElementById('importSessionFile').addEventListener('change', async fu
       await importSessionJSON(new File([txt], f.name, {type:'application/json'}));
       return;
     }
-    // if looks like encrypted payload
+    // if looks like encrypted payload without .enc extension
     if(parsed && parsed.salt && parsed.iv && parsed.ct){
       const pass = prompt('Passphrase pour déchiffrer l\'import');
       if(!pass) { alert('Passphrase requise'); return; }
       const clear = await decryptPayload(parsed, pass);
       const payload = JSON.parse(clear);
-      // create a File-like object for importSessionJSON
       await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,'')+'.json', {type:'application/json'}));
       return;
     }
+
     // fallback: try to parse as session JSON raw
     try{ const payload = JSON.parse(txt); await importSessionJSON(new File([JSON.stringify(payload)], f.name, {type:'application/json'})); }catch(err){ alert('Fichier d\'import invalide'); }
   }catch(e){ alert('Erreur import: '+e.message); }
