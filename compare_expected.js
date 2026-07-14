@@ -50,6 +50,110 @@ async function compareWithExpected(){
 
 // Expose globally
 window.compareWithExpected = compareWithExpected;
+// ----- Normalisation et correction orthographique des noms d'agent -----
+function normalizeName(s){
+  if(s==null) return '';
+  return String(s).toLowerCase().normalize('NFD').replace(/[0-\u036f]/g,'').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s\-\.]/g,'').replace(/\s+/g,' ').trim();
+}
+function levenshtein(a,b){
+  if(a===b) return 0;
+  const m=a.length, n=b.length;
+  if(m===0) return n; if(n===0) return m;
+  const v0 = new Array(n+1), v1 = new Array(n+1);
+  for(let j=0;j<=n;j++) v0[j]=j;
+  for(let i=0;i<m;i++){
+    v1[0]=i+1;
+    for(let j=0;j<n;j++){
+      const cost = a[i]===b[j] ? 0 : 1;
+      v1[j+1] = Math.min(v1[j]+1, v0[j+1]+1, v0[j]+cost);
+    }
+    for(let j=0;j<=n;j++) v0[j]=v1[j];
+  }
+  return v1[n];
+}
+
+function buildCanonicalAgentList(){
+  // build list that prefers persisted canonical mappings and frequent exact names
+  const counts = {};
+  (window.rawLignes||[]).forEach(l=>{
+    const name = (l.agent||'').toString().trim();
+    if(!name) return;
+    counts[name] = (counts[name]||0) + 1;
+  });
+  const stored = loadCanonicalMap();
+  const mapped = new Set(Object.values(stored||{}));
+  // include mapped canonicals first
+  const items = Object.keys(counts).map(k=>({name:k,count:counts[k]})).sort((a,b)=>b.count-a.count);
+  const result = [];
+  mapped.forEach(m=> result.push(m));
+  items.forEach(it=>{ if(!result.includes(it.name)) result.push(it.name); });
+  return result;
+}
+
+function loadCanonicalMap(){
+  try{ const raw = localStorage.getItem('sipp.agentCanonicalMap'); return raw? JSON.parse(raw): {}; }catch(e){ return {}; }
+}
+function saveCanonicalMap(m){ try{ localStorage.setItem('sipp.agentCanonicalMap', JSON.stringify(m||{})); }catch(e){ console.warn('Impossible de sauver canonical map',e); } }
+
+function findBestMatchAgainstList(name, list, thresholdRatio){
+  const n = normalizeName(name);
+  if(!n) return null;
+  let best=null; let bestScore=1e9; let bestNorm=null;
+  list.forEach(candidate=>{
+    const cn = normalizeName(candidate);
+    if(cn===n){ best = candidate; bestScore=0; bestNorm=cn; return; }
+    const d = levenshtein(n,cn);
+    const ratio = d / Math.max(n.length, cn.length);
+    if(ratio < bestScore){ bestScore = ratio; best = candidate; bestNorm = cn; }
+  });
+  if(best===null) return null;
+  return bestScore <= (thresholdRatio||0.34) ? {candidate:best,ratio:bestScore} : null;
+}
+
+async function applyAgentOrthographyCorrection(options){
+  options = options || {};
+  const threshold = typeof options.threshold === 'number' ? options.threshold : 0.34;
+  if(typeof window.rawLignes === 'undefined' || !(window.rawLignes||[]).length){
+    alert('rawLignes introuvable ou vide : importez d\'abord les fichiers.');
+    return {applied:0, suggestions:[]};
+  }
+  const canonical = buildCanonicalAgentList();
+  if(canonical.length<=1) return {applied:0, suggestions:[]};
+  const suggestions = [];
+  let applied = 0;
+  (window.rawLignes||[]).forEach(l=>{
+    const cur = (l.agent||'').toString();
+    if(!cur) return;
+    // if exact canonical exists, skip
+    if(canonical.includes(cur)) return;
+    const match = findBestMatchAgainstList(cur, canonical, threshold);
+    if(match){
+      suggestions.push({contract:l.contrat, from:cur, to:match.candidate, ratio:match.ratio});
+      if(options.apply){ l.agent = match.candidate; applied++; }
+    } else {
+      // no good match found — ask for canonical when applying
+      suggestions.push({contract:l.contrat, from:cur, to:null, ratio:null});
+      if(options.apply){
+        const provided = window.prompt(`Nouvel agent détecté : « ${cur} » — saisir l'orthographe canonique à utiliser (laisser vide = ignorer)`,'');
+        if(provided && provided.trim()){
+          // save mapping and apply
+          const map = loadCanonicalMap(); map[cur] = provided.trim(); saveCanonicalMap(map);
+          l.agent = provided.trim(); applied++;
+        }
+      }
+    }
+  });
+  // if applied and we updated mapping, ensure persistence
+  // already saved in prompt flow
+  return {applied, suggestions};
+}
+
+window.applyAgentOrthographyCorrection = applyAgentOrthographyCorrection;
+// return suggestions only (preview mode)
+async function suggestAgentCorrections(options){
+  options = options || {}; options.apply = false; return await applyAgentOrthographyCorrection(options);
+}
+window.suggestAgentCorrections = suggestAgentCorrections;
 // Validation des règles métier côté client
 async function validateBusinessRules(){
   if(typeof window.rawLignes === 'undefined'){

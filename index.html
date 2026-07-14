@@ -352,6 +352,8 @@
         <div id="compareSummary" style="font-family:var(--mono);font-size:13px;color:var(--ink-dim);flex:1"></div>
         <div style="display:flex;gap:6px">
           <button class="btn" id="filterNonMatchesBtn">Afficher non-correspondances</button>
+          <button class="btn" id="previewCorrectionsBtn">Prévisualiser corrections</button>
+          <button class="btn" id="autoCorrectAgentsBtn">Appliquer corrections agents</button>
           <button class="btn" id="runRulesBtn">Vérifier règles métier</button>
         </div>
       </div>
@@ -1768,6 +1770,51 @@ function showCompareModal(res){
         const okNote = document.createElement('div'); okNote.className='diff-row match'; okNote.textContent='Aucune anomalie métier détectée.'; list.insertBefore(okNote, list.firstChild);
       }
     }catch(err){ showError('Erreur validation : '+err.message); setStatus('Erreur validation','error'); }
+  };
+  // auto-correction orthographique des agents
+  const previewBtn = document.getElementById('previewCorrectionsBtn');
+  previewBtn.onclick = async ()=>{
+    setStatus('Prévisualisation des corrections…');
+    try{
+      if(typeof window.suggestAgentCorrections !== 'function'){
+        showError('Fonction de suggestion introuvable. Vérifiez que le script de comparaison est chargé.'); setStatus('Erreur suggestion','error'); return;
+      }
+      const res = await window.suggestAgentCorrections();
+      // show suggestions at top of modal
+      const suggestionContainer = document.createElement('div');
+      suggestionContainer.style.margin = '8px 0';
+      suggestionContainer.innerHTML = `<h4 style="margin:6px 0">Suggestions (${res.suggestions.length})</h4>`;
+      res.suggestions.slice(0,200).forEach(s=>{
+        const e = document.createElement('div'); e.className='diff-row nomatch';
+        e.textContent = `${s.contract} — ${s.from} → ${s.to===null? '[nouveau]' : s.to}`; suggestionContainer.appendChild(e);
+      });
+      list.insertBefore(suggestionContainer, list.firstChild);
+      setStatus(`Prévisualisation prête — ${res.suggestions.length} suggestion(s).`, res.suggestions.length? 'warn':'ok');
+    }catch(err){ showError('Erreur prévisualisation : '+(err.message||err)); setStatus('Erreur suggestion','error'); }
+  };
+
+  const autoBtn = document.getElementById('autoCorrectAgentsBtn');
+  autoBtn.onclick = async ()=>{
+    setStatus('Application des corrections orthographiques des agents…');
+    try{
+      if(typeof window.applyAgentOrthographyCorrection !== 'function'){
+        showError('Fonction de correction introuvable. Vérifiez que le script de comparaison est chargé.'); setStatus('Erreur correction','error'); return;
+      }
+      const resCorr = await window.applyAgentOrthographyCorrection({apply:true});
+      setStatus(`${resCorr.applied} correction(s) appliquée(s). Suggestions totales: ${resCorr.suggestions.length}.`, resCorr.applied? 'ok' : 'warn');
+      if(typeof window.renderAll === 'function') window.renderAll();
+      try{
+        const newRes = await window.compareWithExpected();
+        sum.textContent = `${newRes.matches} correspondances sur ${newRes.total} — généré le ${new Date(newRes.generatedAt||Date.now()).toLocaleString()}`;
+        list.innerHTML = '';
+        newRes.details.forEach(d=>{
+          const el = document.createElement('div');
+          el.className = 'diff-row ' + (d.match ? 'match' : 'nomatch');
+          el.innerHTML = `<strong>${d.contract}</strong> — attendu: <b style="color:var(--amber)">${d.expected}</b> — réel: <b style="color:var(--mint)">${d.actual}</b>`;
+          list.appendChild(el);
+        });
+      }catch(e){ console.warn('Impossible de rerun compare après correction',e); }
+    }catch(err){ showError('Erreur lors de la correction : '+(err.message||err)); setStatus('Erreur correction','error'); }
   };
 }
 
