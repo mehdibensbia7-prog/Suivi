@@ -4,7 +4,20 @@
     <meta charset="UTF-8">
     <title>SIPP — Suite Globale de Tests & Validation (V2.2)</title>
     <!-- Importation de SheetJS pour le banc d'essai -->
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <script>
+        window.__xlsxLoadFailed = false;
+        window.__xlsxFallbackAttempted = false;
+        function loadLocalXlsxFallback() {
+            if (window.XLSX || window.__xlsxFallbackAttempted) return;
+            window.__xlsxFallbackAttempted = true;
+            const fallbackScript = document.createElement('script');
+            fallbackScript.src = 'xlsx.full.min.js';
+            fallbackScript.onload = () => console.log('SheetJS local fallback loaded.');
+            fallbackScript.onerror = () => console.warn('SheetJS local fallback failed.');
+            document.head.appendChild(fallbackScript);
+        }
+    </script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" onerror="window.__xlsxLoadFailed=true; loadLocalXlsxFallback();"></script>
     <style>
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
@@ -28,7 +41,6 @@
         .fail { border-left-color: #ef4444 !important; background: #3b1818; }
         .status-badge { 
             float: right;
-            display: inline-block; 
             padding: 4px 10px; 
             border-radius: 4px; 
             font-weight: bold; 
@@ -62,6 +74,17 @@
 window.addEventListener('load', () => {
     const resultsContainer = document.getElementById('results');
     resultsContainer.innerHTML = '';
+
+    if (!window.XLSX) {
+        resultsContainer.innerHTML = `
+            <div class="test-card fail">
+                <span class="status-badge status-fail">Erreur</span>
+                <h3>Chargement de SheetJS impossible</h3>
+                <p class="desc">La dépendance XLSX n'a pas pu être chargée. Vérifiez votre connexion ou placez un fichier local <code>xlsx.full.min.js</code> dans le même dossier que index.html.</p>
+            </div>
+        `;
+        return;
+    }
 
     // =========================================================================
     // COPIE CONFORME DE LA LOGIQUE CORRIGÉE (V2.2)
