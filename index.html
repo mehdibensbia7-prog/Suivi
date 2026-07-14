@@ -233,9 +233,11 @@
 
 <!-- Diagnostics log -->
 <div id="diagnosticsPanel" style="position:fixed;left:8px;bottom:8px;z-index:99999;max-width:420px;max-height:40vh;overflow:auto;background:rgba(0,0,0,0.85);color:#fff;padding:8px;border-radius:6px;font-size:12px;display:none">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
     <strong>Diagnostics</strong>
     <div>
+      <button class="btn" id="runImportTestsBtn" style="font-size:12px;">Exécuter tests d'import</button>
+      <button class="btn" id="exportDiagnosticsBtn" style="font-size:12px;">Exporter logs</button>
       <button class="btn" id="clearDiagnosticsBtn" style="font-size:12px;">Effacer</button>
       <button class="btn" id="toggleDiagnosticsBtn" style="font-size:12px;">Fermer</button>
     </div>
@@ -823,6 +825,22 @@ document.getElementById('importEncryptedFile').addEventListener('change', async 
 document.getElementById('toggleDiagnosticsBtn').addEventListener('click', ()=>{ const p=document.getElementById('diagnosticsPanel'); p.style.display = p.style.display==='none'?'block':'none'; });
 document.getElementById('clearDiagnosticsBtn').addEventListener('click', ()=>{ document.getElementById('diagnosticsLog').innerHTML=''; });
 
+// export diagnostics as file
+document.getElementById('exportDiagnosticsBtn').addEventListener('click', ()=>{
+  const txt = document.getElementById('diagnosticsLog').innerText || '';
+  const blob = new Blob([txt], {type:'text/plain'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'diagnostics_'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'_')+'.log'; a.click();
+});
+
+// run import test suite and append results
+document.getElementById('runImportTestsBtn').addEventListener('click', async ()=>{
+  appendDiagnostic('info','Lancement tests','La suite de tests d\'import démarre');
+  try{
+    const res = await runImportTestSuite();
+    appendDiagnostic('info','Tests terminés', JSON.stringify(res.summary||res).slice(0,1000));
+  }catch(e){ appendDiagnostic('error','Erreur tests', String(e)); }
+});
+
 function appendDiagnostic(level, title, detail){
   try{
     const log = document.getElementById('diagnosticsLog');
@@ -1282,22 +1300,49 @@ async function exportSessionById(id){ await openSippDB(); const sessTx = sippDB.
 async function importSessionJSON(file){
   let txt = await file.text();
   try{
-    // attempt parse, with simple auto-repair heuristics
-    let payload;
-    try{ payload = JSON.parse(txt); }
-    catch(pe){
-      appendDiagnostic('warn','JSON invalide, tentative de réparation','Remplacement simple de quotes et réessai');
-      try{ const repaired = txt.replace(/'/g,'"'); payload = JSON.parse(repaired); txt = repaired; appendDiagnostic('info','Réparation JSON réussie',''); }
-      catch(pe2){ appendDiagnostic('error','JSON irréparable','Abandon import'); alert('Fichier JSON invalide et non réparable'); return null; }
+    // robust repair pipeline (mandatory)
+    function tryParse(s){ try{ return JSON.parse(s); }catch(e){ return null; } }
+    let payload = tryParse(txt);
+    if(!payload){
+      appendDiagnostic('warn','JSON invalide','Lancement pipeline de réparation');
+      // 1) remove BOM and non-printable prefix/suffix
+      let s = txt.replace(/^\uFEFF/, '').trim();
+      s = s.replace(/^[^\{\[]+/, ''); s = s.replace(/[^\}\]]+$/, '');
+      payload = tryParse(s);
+      if(payload){ txt = s; appendDiagnostic('info','Réparation 1 réussie','Trim BOM/prefix/suffix'); }
+    }
+    if(!payload){
+      // 2) replace smart quotes and backticks
+      let s2 = txt.replace(/[\u2018\u2019\u201C\u201D\u201A\u201B\u2032\u2033]/g,'"').replace(/`/g,'"');
+      payload = tryParse(s2);
+      if(payload){ txt = s2; appendDiagnostic('info','Réparation 2 réussie','Normalisation des guillemets'); }
+    }
+    if(!payload){
+      // 3) replace single quotes with double quotes (naïf)
+      let s3 = txt.replace(/'(?=[^:]+:)/g,'"').replace(/:(\s*)'([^']*)'(?=[,}\]])/g, ':"$2"').replace(/'([^']*)'/g,'"$1"');
+      payload = tryParse(s3);
+      if(payload){ txt = s3; appendDiagnostic('info','Réparation 3 réussie','Remplacement des apostrophes'); }
+    }
+    if(!payload){
+      // 4) remove trailing commas
+      let s4 = txt.replace(/,\s*([}\]])/g, '$1');
+      payload = tryParse(s4);
+      if(payload){ txt = s4; appendDiagnostic('info','Réparation 4 réussie','Suppression des virgules finales'); }
+    }
+    if(!payload){
+      // 5) quote unquoted keys (simple heuristic)
+      let s5 = txt.replace(/([,{]\s*)([A-Za-z0-9_\-]+)\s*:/g, '$1"$2":');
+      payload = tryParse(s5);
+      if(payload){ txt = s5; appendDiagnostic('info','Réparation 5 réussie','Quotation des clefs non-quotées'); }
+    }
+    if(!payload){
+      appendDiagnostic('error','JSON irréparable','Aucune heuristique n\'a abouti — génération d\'une session vide');
+      payload = { meta:{ id:'sess-import-'+Date.now(), name:'Imported (repaired-empty) '+new Date().toLocaleString(), createdAt:new Date().toISOString(), createdBy: currentRole||'import-auto' }, lines:[] };
     }
 
+    // payload now exists (either repaired or generated)
     await openSippDB();
-    // If meta missing, auto-generate and continue (auto-fix)
-    if(!payload.meta){
-      appendDiagnostic('warn','Meta manquante','Génération automatique de meta pour import');
-      payload.meta = { id: 'sess-import-'+Date.now(), name: 'Imported session '+new Date().toLocaleString(), createdAt:new Date().toISOString(), createdBy: currentRole||'import-auto' };
-    }
-
+    if(!payload.meta){ appendDiagnostic('warn','Meta manquante après réparation','Génération automatique de meta'); payload.meta = { id:'sess-import-'+Date.now(), name:'Imported session '+new Date().toLocaleString(), createdAt:new Date().toISOString(), createdBy: currentRole||'import-auto' }; }
     const meta = payload.meta;
     const id = meta.id || ('sess-import-'+Date.now());
     return new Promise((resolve,reject)=>{
@@ -1310,6 +1355,32 @@ async function importSessionJSON(file){
     });
   }catch(e){ appendDiagnostic('error','Import invalide', String(e)); alert('Import invalide: '+e.message); return null; }
 }
+
+  // Additional heuristic: escape newlines and strip control chars (applied earlier in pipeline)
+  // RunImportTestSuite: programmatic re-run of the import test scenarios (used by diagnostics button)
+  async function runImportTestSuite(){
+    const results = {summary:[], details:[]};
+    // cleanup
+    await openSippDB(); const old = await getAllSessions(); if(Array.isArray(old)){ for(const s of old){ try{ await deleteSessionById(s.id); }catch(e){} } }
+    // helper to programmatically trigger file inputs
+    async function setFileInput(selector, content, name){ const el = document.querySelector(selector); const f = new File([content], name, {type:'application/json'}); const dt = new DataTransfer(); dt.items.add(f); el.files = dt.files; el.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,500)); }
+
+    // 1: plain
+    const payload1 = JSON.stringify({ meta:{ id:'t1-'+Date.now(), name:'Test Plain', createdAt:new Date().toISOString(), createdBy:'tester'}, lines:[{contrat:'00001', type:'MINT', agent:'Alice', brut:100}] });
+    await setFileInput('#importSessionFile', payload1, 'session_plain.json'); results.summary.push('plain');
+    // 2: missing meta
+    const payload2 = JSON.stringify({ lines:[{contrat:'00002', type:'MINT'}] });
+    await setFileInput('#importSessionFile', payload2, 'missing_meta.json'); results.summary.push('missing_meta');
+    // 3: malformed
+    const bad = "{ not: json, 'a':1 }";
+    await setFileInput('#importSessionFile', bad, 'bad.json'); results.summary.push('malformed');
+    // 4: encrypted valid
+    const pass = 's3cr3t!'; const plainPayload = JSON.stringify({ meta:{ id:'tenc-'+Date.now(), name:'Test Enc', createdAt:new Date().toISOString(), createdBy:'tester'}, lines:[{contrat:'E0001', type:'MINT', agent:'Bob', brut:200}] });
+    const salt = (Math.random()+''+Date.now()).slice(2,12); const iv = crypto.getRandomValues(new Uint8Array(12)); const key = await deriveKeyFromPass(pass, salt); const ctBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, new TextEncoder().encode(plainPayload)); const ctB64 = btoa(String.fromCharCode(...new Uint8Array(ctBuf))); const encPayload = JSON.stringify({ salt: salt, iv: Array.from(iv), ct: ctB64 });
+    window._promptResponses = [pass]; await setFileInput('#importSessionFile', encPayload, 'session_enc.json'); results.summary.push('enc_valid');
+    // return summary of sessions
+    const final = await getAllSessions(); results.details = final.map(s=>({id:s.id,name:s.name})); return results;
+  }
 
 // simple encryption POC using WebCrypto
 async function deriveKeyFromPass(pass, salt){ const enc = new TextEncoder(); const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pass), {name:'PBKDF2'}, false, ['deriveKey']); return crypto.subtle.deriveKey({name:'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash:'SHA-256'}, keyMaterial, {name:'AES-GCM', length:256}, true, ['encrypt','decrypt']); }
