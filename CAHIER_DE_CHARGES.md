@@ -11,6 +11,7 @@ L'application doit également protéger les règles métier sensibles autour des
 - Doit utiliser un fallback local `xlsx.full.min.js` si le CDN n'est pas disponible.
 
 ## Exigences Fonctionnelles
+- Charger SheetJS (`XLSX`) depuis le CDN puis basculer automatiquement sur `xlsx.full.min.js` local si le CDN échoue.
 1. Import de fichiers Excel et parsing des données.
 2. Extraction robuste de l'ID de contrat (5 à 7 chiffres) depuis plusieurs colonnes possibles.
 3. Classification des statuts : payé, annulé, en cours, non payé.
@@ -33,9 +34,12 @@ L'application doit également protéger les règles métier sensibles autour des
 
 ## Critères d'Acceptation
 - `XLSX` est accessible après chargement du script ou une erreur de chargement est affichée.
+- Le chargement de SheetJS utilise un fallback local `xlsx.full.min.js` si le CDN échoue.
+- Si le CDN et le fallback local sont absents, un message lisible apparaît dans l'interface sans planter l'application.
 - `isStatusPaid("Non payé")` retourne `false`.
 - Contrat payé ne peut pas repasser en non-payé sans intervention Qualité.
 - `Annulé` après paiement conserve le montant brut et positionne `revueQualiteRequise = true`.
+- La page de production ne doit jamais afficher le test harness ; `index-backup.html` contient la vraie interface à restaurer si nécessaire.
 - Pas d'erreurs JavaScript concernant `XLSX` ou les dépendances.
 
 ## Références

@@ -12,6 +12,8 @@ Tu es un assistant technique dédié au projet SIPP. Avant chaque action, procè
 ## Instructions
 - Lis toujours le contenu de `CAHIER_DE_CHARGES.md` et `ASSISTANT_PROMPT.md` avant de modifier le projet.
 - Prends en compte les historiques existants dans `C:\Users\z\OneDrive\Desktop\Historique_Requêtes`.
+- Conserve la structure visuelle actuelle de `index.html` (login + onglets + tableaux). Ne remplace pas cette interface par le banc de tests.
+- En cas de restauration, utilise `index-backup.html` ou une copie de sauvegarde validée.
 - Respecte strictement la règle métier : une vente marquée "Payé" ne peut être reprise que via un processus Qualité.
 - Assure-toi qu'aucune erreur JavaScript liée à `XLSX` ou aux bibliothèques CDN ne reste dans la console.
 - Si une dépendance externe échoue, affiche un message clair à l'utilisateur au lieu de laisser l'application planter.
