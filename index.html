@@ -848,9 +848,12 @@ try{
   const autoChk = document.getElementById('autoRunTestsCheckbox');
   const autoBadge = document.getElementById('autoRunBadge');
   function setAutoBadge(on){ if(!autoBadge) return; if(on){ autoBadge.textContent = 'Auto-run: ON'; autoBadge.className='status-badge ok'; autoBadge.style.display='inline-flex'; } else { autoBadge.style.display='none'; } }
-  const enabled = localStorage.getItem('sipp.autoRunTests') === 'true';
-  autoChk.checked = enabled;
-  setAutoBadge(enabled);
+  // enable auto-run by default for all users unless explicitly set
+  let enabled = localStorage.getItem('sipp.autoRunTests');
+  if(enabled === null){ enabled = 'true'; localStorage.setItem('sipp.autoRunTests','true'); }
+  const isEnabled = enabled === 'true';
+  autoChk.checked = isEnabled;
+  setAutoBadge(isEnabled);
   autoChk.addEventListener('change', function(){
     const on = this.checked;
     localStorage.setItem('sipp.autoRunTests', on ? 'true' : 'false');
