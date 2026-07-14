@@ -21,9 +21,9 @@ async function compareWithExpected(){
         else if(found.type === 'CONSO') actual = found.statutPaiement || '—';
         else actual = found.statutCRM || found.statutPaiementBrut || '—';
       }
-      const normalizedActual = (actual||'Introuvable').toString().toLowerCase();
-      const normalizedExpected = (m.expectedStatus||'').toString().toLowerCase();
-      const match = normalizedActual.includes(normalizedExpected) || (m.expectedStatus==='Introuvable (CRM)' && !found);
+      const normalizedActual = normalizeText(actual||'Introuvable');
+      const normalizedExpected = normalizeText(m.expectedStatus||'');
+      const match = (normalizedExpected !== '' && normalizedActual.includes(normalizedExpected)) || (m.expectedStatus==='Introuvable (CRM)' && !found);
       return { contract: m.contract, expected: m.expectedStatus, actual: actual||'Introuvable', match };
     });
 
@@ -53,7 +53,11 @@ window.compareWithExpected = compareWithExpected;
 // ----- Normalisation et correction orthographique des noms d'agent -----
 function normalizeName(s){
   if(s==null) return '';
-  return String(s).toLowerCase().normalize('NFD').replace(/[0-\u036f]/g,'').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s\-\.]/g,'').replace(/\s+/g,' ').trim();
+    return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s\-\.']/g,'').replace(/\s+/g,' ').trim();
+}
+function normalizeText(s){
+  if(s==null) return '';
+  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'').trim();
 }
 function levenshtein(a,b){
   if(a===b) return 0;
@@ -131,16 +135,8 @@ async function applyAgentOrthographyCorrection(options){
       suggestions.push({contract:l.contrat, from:cur, to:match.candidate, ratio:match.ratio});
       if(options.apply){ l.agent = match.candidate; applied++; }
     } else {
-      // no good match found — ask for canonical when applying
+      // no good match found — add suggestion without applying; UI should handle providing canonical forms
       suggestions.push({contract:l.contrat, from:cur, to:null, ratio:null});
-      if(options.apply){
-        const provided = window.prompt(`Nouvel agent détecté : « ${cur} » — saisir l'orthographe canonique à utiliser (laisser vide = ignorer)`,'');
-        if(provided && provided.trim()){
-          // save mapping and apply
-          const map = loadCanonicalMap(); map[cur] = provided.trim(); saveCanonicalMap(map);
-          l.agent = provided.trim(); applied++;
-        }
-      }
     }
   });
   // if applied and we updated mapping, ensure persistence

@@ -4,8 +4,8 @@ $outCompare='compare_report_auto.json'
 $outRules='rules_report_auto.json'
 if(-not (Test-Path $expectedFile)) { Write-Output 'MISSING_EXPECTED'; exit 2 }
 if(-not (Test-Path $inspectFile)) { Write-Output 'MISSING_INSPECT'; exit 3 }
-$expected = Get-Content $expectedFile -Raw | ConvertFrom-Json
-$inspect = Get-Content $inspectFile -Raw | ConvertFrom-Json
+$expected = Get-Content $expectedFile -Raw -Encoding UTF8 | ConvertFrom-Json
+$inspect = Get-Content $inspectFile -Raw -Encoding UTF8 | ConvertFrom-Json
 function idx($arr,$pattern){ for($i=0;$i -lt $arr.Count;$i++){ $cell = $arr[$i]; if($cell -ne $null){ $s = $cell.ToString().ToLower(); if($s -match $pattern){ return $i } } } return -1 }
 $crmMap = @{}
 $crmSource = @{}

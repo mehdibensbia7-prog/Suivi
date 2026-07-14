@@ -394,6 +394,21 @@
   </div>
 </div>
 
+<!-- Modal agent mapping editor -->
+<div id="agentMappingModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideAgentMappingModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Édition des orthographes canoniques des agents</h3>
+      <p style="color:var(--ink-dim);margin-top:4px">Vérifiez et corrigez les noms détectés avant application. Les modifications seront persistées.</p>
+      <div id="agentMappingList" style="max-height:40vh;overflow:auto;margin-top:8px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" onclick="hideAgentMappingModal()">Annuler</button>
+        <button class="btn primary" id="applyAgentMappingsBtn">Appliquer les mappings</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <footer>SIPP v1 — moteur de calcul 100% client-side (aucune donnée envoyée à un serveur). Règles de commissionnement : voir cahier des charges.</footer>
 
 <script>
@@ -1979,7 +1994,13 @@ function showCompareModal(res){
         showError('Fonction de correction introuvable. Vérifiez que le script de comparaison est chargé.'); setStatus('Erreur correction','error'); return;
       }
       const resCorr = await window.applyAgentOrthographyCorrection({apply:true});
+      // if there are unmapped suggestions (to==null), open mapping modal for user input
       setStatus(`${resCorr.applied} correction(s) appliquée(s). Suggestions totales: ${resCorr.suggestions.length}.`, resCorr.applied? 'ok' : 'warn');
+      const unmapped = (resCorr.suggestions||[]).filter(s=>!s.to).map(s=>s.from).filter((v,i,a)=>a.indexOf(v)===i);
+      if(unmapped.length){
+        showAgentMappingModal(unmapped);
+        return;
+      }
       if(typeof window.renderAll === 'function') window.renderAll();
       try{
         const newRes = await window.compareWithExpected();
@@ -1994,6 +2015,38 @@ function showCompareModal(res){
       }catch(e){ console.warn('Impossible de rerun compare après correction',e); }
     }catch(err){ showError('Erreur lors de la correction : '+(err.message||err)); setStatus('Erreur correction','error'); }
   };
+
+function showAgentMappingModal(unmappedArray){
+  const modal = document.getElementById('agentMappingModal');
+  const list = document.getElementById('agentMappingList'); list.innerHTML = '';
+  const map = loadCanonicalMap();
+  unmappedArray.forEach(u=>{
+    const row = document.createElement('div'); row.className='diff-row nomatch';
+    const input = document.createElement('input'); input.type='text'; input.value = map[u] || u; input.style.width='70%'; input.style.marginRight='8px';
+    const span = document.createElement('span'); span.textContent = u; span.style.marginRight='8px'; span.style.color='var(--ink-dim)';
+    row.appendChild(span); row.appendChild(input);
+    list.appendChild(row);
+  });
+  document.getElementById('applyAgentMappingsBtn').onclick = async ()=>{
+    const rows = Array.from(list.children);
+    const newMap = loadCanonicalMap();
+    rows.forEach(r=>{
+      const parts = r.querySelectorAll('span,input');
+      if(parts.length>=2){ const orig = parts[0].textContent; const val = parts[1].value.trim(); if(val && val!==orig) newMap[orig]=val; }
+    });
+    saveCanonicalMap(newMap);
+    // apply to rawLignes
+    const applied = [];
+    (window.rawLignes||[]).forEach(l=>{ if(newMap[l.agent]){ l.agent = newMap[l.agent]; applied.push(l.contrat); } });
+    if(typeof window.renderAll === 'function') window.renderAll();
+    hideAgentMappingModal();
+    setStatus(`Mappings appliqués : ${applied.length}`, applied.length? 'ok':'warn');
+    try{ const newRes = await window.compareWithExpected(); /* refresh compare modal if open */ const cmpModal = document.getElementById('compareModal'); if(cmpModal.style.display==='block'){ const sumEl = document.getElementById('compareSummary'); const listEl = document.getElementById('compareList'); sumEl.textContent = `${newRes.matches} correspondances sur ${newRes.total} — généré le ${new Date(newRes.generatedAt||Date.now()).toLocaleString()}`; listEl.innerHTML=''; newRes.details.forEach(d=>{ const el=document.createElement('div'); el.className='diff-row '+(d.match?'match':'nomatch'); el.innerHTML = `<strong>${d.contract}</strong> — attendu: <b style="color:var(--amber)">${d.expected}</b> — réel: <b style="color:var(--mint)">${d.actual}</b>`; listEl.appendChild(el); }); }
+    }catch(e){ console.warn('Erreur rafraîchissement compare:',e); }
+  };
+  modal.style.display='block';
+}
+function hideAgentMappingModal(e){ document.getElementById('agentMappingModal').style.display='none'; }
 }
 
 function hideCompareModal(e){
