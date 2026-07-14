@@ -231,6 +231,18 @@
   <span id="status-badge" class="status-badge" style="display:none"></span>
 </div>
 
+<!-- Diagnostics log -->
+<div id="diagnosticsPanel" style="position:fixed;left:8px;bottom:8px;z-index:99999;max-width:420px;max-height:40vh;overflow:auto;background:rgba(0,0,0,0.85);color:#fff;padding:8px;border-radius:6px;font-size:12px;display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <strong>Diagnostics</strong>
+    <div>
+      <button class="btn" id="clearDiagnosticsBtn" style="font-size:12px;">Effacer</button>
+      <button class="btn" id="toggleDiagnosticsBtn" style="font-size:12px;">Fermer</button>
+    </div>
+  </div>
+  <div id="diagnosticsLog" style="max-height:34vh;overflow:auto"></div>
+</div>
+
 <div class="nav">
   <button class="navbtn active" data-tab="suivi">Suivi Opérationnel</button>
   <button class="navbtn" data-tab="finance">Trésorerie & Commissions</button>
@@ -807,16 +819,34 @@ document.getElementById('importEncryptedFile').addEventListener('change', async 
   }catch(e){ alert('Erreur import chiffré: '+e.message); }
 });
 
+// Diagnostics panel controls
+document.getElementById('toggleDiagnosticsBtn').addEventListener('click', ()=>{ const p=document.getElementById('diagnosticsPanel'); p.style.display = p.style.display==='none'?'block':'none'; });
+document.getElementById('clearDiagnosticsBtn').addEventListener('click', ()=>{ document.getElementById('diagnosticsLog').innerHTML=''; });
+
+function appendDiagnostic(level, title, detail){
+  try{
+    const log = document.getElementById('diagnosticsLog');
+    const row = document.createElement('div'); row.style.padding='6px'; row.style.borderBottom='1px solid rgba(255,255,255,0.06)';
+    const time = new Date().toISOString().slice(11,19);
+    row.innerHTML = `<div style="font-weight:600">[${time}] ${title} <span style=\"color:var(--ink-dim);font-weight:400;margin-left:6px;font-size:11px\">${level}</span></div><div style=\"font-size:12px;color:#ddd;white-space:pre-wrap;margin-top:4px\">${detail||''}</div>`;
+    log.insertBefore(row, log.firstChild);
+    document.getElementById('diagnosticsPanel').style.display='block';
+  }catch(e){ console.warn('Diag append failed', e); }
+}
+
 async function decryptPayload(payload, pass){
-  const salt = payload.salt;
-  const iv = new Uint8Array(payload.iv);
-  const ctStr = atob(payload.ct);
-  const ctArr = new Uint8Array(ctStr.length);
-  for(let i=0;i<ctStr.length;i++) ctArr[i] = ctStr.charCodeAt(i);
-  const key = await deriveKeyFromPass(pass, salt);
-  const plainBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ctArr.buffer);
-  const dec = new TextDecoder();
-  return dec.decode(plainBuf);
+  try{
+    const salt = payload.salt;
+    const iv = new Uint8Array(payload.iv);
+    const ctStr = atob(payload.ct);
+    const ctArr = new Uint8Array(ctStr.length);
+    for(let i=0;i<ctStr.length;i++) ctArr[i] = ctStr.charCodeAt(i);
+    const key = await deriveKeyFromPass(pass, salt);
+    const plainBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ctArr.buffer);
+    const dec = new TextDecoder();
+    appendDiagnostic('info','Déchiffrement réussi','');
+    return dec.decode(plainBuf);
+  }catch(e){ appendDiagnostic('error','Échec déchiffrement', String(e)); throw e; }
 }
 
 /* ============================= DÉTECTION DES 2 TABLES (sur tout le classeur) ============================= */
@@ -1250,24 +1280,35 @@ async function exportSessionById(id){ await openSippDB(); const sessTx = sippDB.
 }
 
 async function importSessionJSON(file){
-  const txt = await file.text();
+  let txt = await file.text();
   try{
-    const payload = JSON.parse(txt);
-    await openSippDB();
-    if(payload.meta){
-      const meta = payload.meta;
-      const id = meta.id || ('sess-import-'+Date.now()); // ensure unique id
-      return new Promise((resolve,reject)=>{
-        const tx = sippDB.transaction(['sessions','lignes'],'readwrite');
-        tx.objectStore('sessions').put(Object.assign({},meta,{id}));
-        const store = tx.objectStore('lignes');
-        (payload.lines||[]).forEach(l=>{ l.sessionId = id; l.key = id+'::'+l.contrat+'::'+l.type; store.put(l); });
-        tx.oncomplete = ()=>{ setCurrentSessionId(id); setStatus('Session importée: '+(meta.name||id),'ok'); loadAndRenderSessions(); resolve(id); };
-        tx.onerror = ()=> reject(tx.error);
-      });
+    // attempt parse, with simple auto-repair heuristics
+    let payload;
+    try{ payload = JSON.parse(txt); }
+    catch(pe){
+      appendDiagnostic('warn','JSON invalide, tentative de réparation','Remplacement simple de quotes et réessai');
+      try{ const repaired = txt.replace(/'/g,'"'); payload = JSON.parse(repaired); txt = repaired; appendDiagnostic('info','Réparation JSON réussie',''); }
+      catch(pe2){ appendDiagnostic('error','JSON irréparable','Abandon import'); alert('Fichier JSON invalide et non réparable'); return null; }
     }
-    throw new Error('Payload invalide (meta manquant)');
-  }catch(e){ alert('Import invalide: '+e.message); return null; }
+
+    await openSippDB();
+    // If meta missing, auto-generate and continue (auto-fix)
+    if(!payload.meta){
+      appendDiagnostic('warn','Meta manquante','Génération automatique de meta pour import');
+      payload.meta = { id: 'sess-import-'+Date.now(), name: 'Imported session '+new Date().toLocaleString(), createdAt:new Date().toISOString(), createdBy: currentRole||'import-auto' };
+    }
+
+    const meta = payload.meta;
+    const id = meta.id || ('sess-import-'+Date.now());
+    return new Promise((resolve,reject)=>{
+      const tx = sippDB.transaction(['sessions','lignes'],'readwrite');
+      tx.objectStore('sessions').put(Object.assign({},meta,{id}));
+      const store = tx.objectStore('lignes');
+      (payload.lines||[]).forEach(l=>{ l.sessionId = id; l.key = id+'::'+(l.contrat||'')+'::'+(l.type||''); store.put(l); });
+      tx.oncomplete = ()=>{ appendDiagnostic('success','Import terminé','Session: '+(meta.name||id)); setCurrentSessionId(id); setStatus('Session importée: '+(meta.name||id),'ok'); loadAndRenderSessions(); resolve(id); };
+      tx.onerror = ()=>{ appendDiagnostic('error','Échec import DB', String(tx.error)); reject(tx.error); };
+    });
+  }catch(e){ appendDiagnostic('error','Import invalide', String(e)); alert('Import invalide: '+e.message); return null; }
 }
 
 // simple encryption POC using WebCrypto
