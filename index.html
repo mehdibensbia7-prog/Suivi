@@ -219,12 +219,14 @@
 
 <div class="toolbar" id="mainToolbar">
   <label class="file-btn">Importer un ou plusieurs fichiers .xlsx<input type="file" id="fileInput" accept=".xlsx,.xls" multiple></label>
+  <button class="btn" id="sessionsBtn">Sessions</button>
   <select id="sheetSelector"><option value="">Feuille…</option></select>
   <span style="width:1px;height:22px;background:var(--line);"></span>
   <button class="btn" id="exportOverridesBtn">Exporter l'état (JSON)</button>
   <label class="btn file-btn" id="stateInputLabel" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);">Importer l'état<input type="file" id="stateInput" accept=".json"></label>
   <button class="btn primary" id="exportFinanceBtn">Exporter Trésorerie (.xlsx)</button>
   <button class="btn" id="compareExpectedBtn">Comparer attendu</button>
+  <button class="btn" id="exportAuditBtn">Exporter audit</button>
   <span id="status-msg"></span>
   <span id="status-badge" class="status-badge" style="display:none"></span>
 </div>
@@ -389,6 +391,24 @@
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
         <button class="btn" onclick="hideImportSummaryModal()">Fermer</button>
         <button class="btn primary" id="downloadImportReportBtn">Télécharger le rapport</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal sessions manager -->
+<div id="sessionsModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideSessionsModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Gestion des sessions</h3>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn" id="createSessionBtn">Nouvelle session</button>
+        <label class="btn file-btn" style="background:var(--panel);border:1px solid var(--line);">Importer session<input type="file" id="importSessionFile" accept="application/json" style="display:none"></label>
+        <button class="btn" id="refreshSessionsBtn">Rafraîchir</button>
+      </div>
+      <div id="sessionsList" style="max-height:45vh;overflow:auto"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" onclick="hideSessionsModal()">Fermer</button>
       </div>
     </div>
   </div>
@@ -704,6 +724,24 @@ document.getElementById('downloadImportReportBtn').addEventListener('click', ()=
   const blob = new Blob([txt],{type:'application/json'});
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'import_report_'+new Date().toISOString().slice(0,10)+'.json'; a.click();
 });
+
+// export audit
+document.getElementById('exportAuditBtn').addEventListener('click', async ()=>{
+  try{
+    await openSippDB();
+    const tx = sippDB.transaction(['audit'],'readonly'); const store = tx.objectStore('audit'); const all=[];
+    const req = store.openCursor();
+    req.onsuccess = ev => {
+      const cur = ev.target.result; if(!cur){ const txt = JSON.stringify(all,null,2); const pass = prompt('Passphrase pour chiffrer l\'audit (laisser vide = non chiffré)'); if(pass && pass.trim()){ encryptAndDownload(txt, pass.trim(), 'audit_'+new Date().toISOString().slice(0,10)+'.enc'); } else { const blob = new Blob([txt],{type:'application/json'}); const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'audit_'+new Date().toISOString().slice(0,10)+'.json'; a.click(); } return; } all.push(cur.value); cur.continue(); };
+    req.onerror = ()=> { alert('Erreur export audit'); };
+  }catch(e){ alert('Erreur export audit: '+e.message); }
+});
+
+// sessions UI wiring
+document.getElementById('sessionsBtn').addEventListener('click', ()=> showSessionsModal());
+document.getElementById('refreshSessionsBtn').addEventListener('click', ()=> loadAndRenderSessions());
+document.getElementById('createSessionBtn').addEventListener('click', async ()=>{ const name = prompt('Nom de la nouvelle session'); if(!name) return; await openSippDB(); const meta = await createSession(name); loadAndRenderSessions(); setStatus('Session créée: '+meta.name,'ok'); });
+document.getElementById('importSessionFile').addEventListener('change', async function(e){ const f = this.files[0]; if(!f) return; await importSessionJSON(f); this.value=''; });
 
 /* ============================= DÉTECTION DES 2 TABLES (sur tout le classeur) ============================= */
 // Table A = suivi commercial (formulaire agents). Table B = export CRM (statuts contrats).
@@ -1072,6 +1110,67 @@ function showImportSessionModal(){ document.getElementById('importSessionModal')
 function hideImportSessionModal(e){ document.getElementById('importSessionModal').style.display='none'; }
 function showImportSummaryModal(){ document.getElementById('importSummaryModal').style.display='block'; }
 function hideImportSummaryModal(e){ document.getElementById('importSummaryModal').style.display='none'; }
+
+// Sessions modal handlers
+function showSessionsModal(){ document.getElementById('sessionsModal').style.display='block'; loadAndRenderSessions(); }
+function hideSessionsModal(e){ document.getElementById('sessionsModal').style.display='none'; }
+
+async function getAllSessions(){
+  await openSippDB();
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['sessions'],'readonly');
+    const store = tx.objectStore('sessions');
+    const out = [];
+    const req = store.openCursor();
+    req.onsuccess = ev => { const cur = ev.target.result; if(!cur){ resolve(out); return; } out.push(cur.value); cur.continue(); };
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function loadAndRenderSessions(){
+  const list = document.getElementById('sessionsList'); list.innerHTML='Chargement...';
+  try{
+    const sess = await getAllSessions();
+    if(!sess.length){ list.innerHTML='<div class="empty">Aucune session trouvée.</div>'; return; }
+    list.innerHTML='';
+    sess.forEach(s=>{
+      const el = document.createElement('div'); el.className='diff-row';
+      el.style.display='flex'; el.style.justifyContent='space-between'; el.style.alignItems='center';
+      const left = document.createElement('div'); left.innerHTML = `<strong>${s.name}</strong><div style="color:var(--ink-dim);font-size:12px">${s.createdAt} · ${s.createdBy}</div>`;
+      const right = document.createElement('div');
+      const useBtn = document.createElement('button'); useBtn.className='btn'; useBtn.textContent='Ouvrir'; useBtn.onclick = async ()=>{ setCurrentSessionId(s.id); setStatus('Session active: '+s.name,'ok'); hideSessionsModal(); };
+      const exportBtn = document.createElement('button'); exportBtn.className='btn'; exportBtn.textContent='Exporter'; exportBtn.onclick = ()=> exportSessionById(s.id);
+      const delBtn = document.createElement('button'); delBtn.className='btn'; delBtn.textContent='Supprimer'; delBtn.onclick = ()=>{ if(confirm('Supprimer la session '+s.name+' ?')) deleteSessionById(s.id).then(()=> loadAndRenderSessions()); };
+      right.appendChild(useBtn); right.appendChild(exportBtn); right.appendChild(delBtn);
+      el.appendChild(left); el.appendChild(right);
+      list.appendChild(el);
+    });
+  }catch(e){ list.innerHTML = '<div class="empty">Erreur chargement sessions</div>'; console.warn(e); }
+}
+
+async function deleteSessionById(id){ await openSippDB(); return new Promise((resolve,reject)=>{ const tx = sippDB.transaction(['sessions','lignes'],'readwrite'); tx.objectStore('sessions').delete(id); // delete lignes by cursor
+  const store = tx.objectStore('lignes'); const req = store.openCursor(); req.onsuccess = ev => { const cur = ev.target.result; if(!cur){ resolve(true); return; } if(cur.value.sessionId===id){ cur.delete(); } cur.continue(); }; req.onerror = ()=> reject(req.error); }); }
+
+async function exportSessionById(id){ await openSippDB(); const sessTx = sippDB.transaction(['sessions'],'readonly'); const sessStore = sessTx.objectStore('sessions'); const getReq = sessStore.get(id); getReq.onsuccess = async ()=>{
+  const meta = getReq.result || {id,name:'session-'+id};
+  // get lignes
+  const lines = await getAllLignesForSession(id);
+  const payload = {meta, lines};
+  const txt = JSON.stringify(payload,null,2);
+  const pass = prompt('Saisir une passphrase pour chiffrer l\'export (laisser vide = non chiffré)');
+  if(pass && pass.trim()){ await encryptAndDownload(txt, pass.trim(), `session_${id}.json.enc`); } else { const blob = new Blob([txt],{type:'application/json'}); const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `session_${id}.json`; a.click(); }
+ };
+}
+
+async function importSessionJSON(file){ const txt = await file.text(); try{ const payload = JSON.parse(txt); await openSippDB(); if(payload.meta) { const meta = payload.meta; const id = meta.id || ('sess-import-'+Date.now()); // ensure unique id
+    const tx = sippDB.transaction(['sessions','lignes'],'readwrite'); tx.objectStore('sessions').put(Object.assign({},meta,{id})); const store = tx.objectStore('lignes'); (payload.lines||[]).forEach(l=>{ l.sessionId = id; l.key = id+'::'+l.contrat+'::'+l.type; store.put(l); }); tx.oncomplete = ()=>{ setCurrentSessionId(id); setStatus('Session importée: '+(meta.name||id),'ok'); loadAndRenderSessions(); }; }
+ }catch(e){ alert('Import invalide: '+e.message); }
+}
+
+// simple encryption POC using WebCrypto
+async function deriveKeyFromPass(pass, salt){ const enc = new TextEncoder(); const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pass), {name:'PBKDF2'}, false, ['deriveKey']); return crypto.subtle.deriveKey({name:'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash:'SHA-256'}, keyMaterial, {name:'AES-GCM', length:256}, true, ['encrypt','decrypt']); }
+
+async function encryptAndDownload(plaintext, pass, filename){ const iv = crypto.getRandomValues(new Uint8Array(12)); const salt = (Math.random()+''+Date.now()).slice(2,12); const key = await deriveKeyFromPass(pass, salt); const enc = new TextEncoder(); const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, enc.encode(plaintext)); const blob = new Blob([salt, '::', Array.from(iv).join(','), '::', new Uint8Array(ct).buffer],[{type:'application/octet-stream'}]); const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); }
 
 
 /* ============================= MOTEUR DE CALCUL ============================= */
