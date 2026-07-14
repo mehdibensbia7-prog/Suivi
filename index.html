@@ -236,6 +236,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
     <strong>Diagnostics</strong>
     <div>
+      <label style="font-size:12px;margin-right:8px"><input type="checkbox" id="autoRunTestsCheckbox"> Auto-run après import</label>
       <button class="btn" id="runImportTestsBtn" style="font-size:12px;">Exécuter tests d'import</button>
       <button class="btn" id="exportDiagnosticsBtn" style="font-size:12px;">Exporter logs</button>
       <button class="btn" id="clearDiagnosticsBtn" style="font-size:12px;">Effacer</button>
@@ -841,6 +842,16 @@ document.getElementById('runImportTestsBtn').addEventListener('click', async ()=
   }catch(e){ appendDiagnostic('error','Erreur tests', String(e)); }
 });
 
+// initialize auto-run checkbox state and listener
+try{
+  const autoChk = document.getElementById('autoRunTestsCheckbox');
+  if(localStorage.getItem('sipp.autoRunTests') === 'true') autoChk.checked = true;
+  autoChk.addEventListener('change', function(){
+    localStorage.setItem('sipp.autoRunTests', this.checked ? 'true' : 'false');
+    appendDiagnostic('info','Auto-run tests', this.checked ? 'Activé' : 'Désactivé');
+  });
+}catch(e){ console.warn('Auto-run checkbox init failed', e); }
+
 function appendDiagnostic(level, title, detail){
   try{
     const log = document.getElementById('diagnosticsLog');
@@ -1350,7 +1361,16 @@ async function importSessionJSON(file){
       tx.objectStore('sessions').put(Object.assign({},meta,{id}));
       const store = tx.objectStore('lignes');
       (payload.lines||[]).forEach(l=>{ l.sessionId = id; l.key = id+'::'+(l.contrat||'')+'::'+(l.type||''); store.put(l); });
-      tx.oncomplete = ()=>{ appendDiagnostic('success','Import terminé','Session: '+(meta.name||id)); setCurrentSessionId(id); setStatus('Session importée: '+(meta.name||id),'ok'); loadAndRenderSessions(); resolve(id); };
+      tx.oncomplete = async ()=>{ appendDiagnostic('success','Import terminé','Session: '+(meta.name||id)); setCurrentSessionId(id); setStatus('Session importée: '+(meta.name||id),'ok'); loadAndRenderSessions();
+        try{
+          if(localStorage.getItem('sipp.autoRunTests')==='true'){
+            appendDiagnostic('info','Auto-run','Démarrage des tests après import');
+            const res = await runImportTestSuite();
+            appendDiagnostic('info','Resultats tests après import', JSON.stringify(res.summary||res).slice(0,1000));
+          }
+        }catch(err){ appendDiagnostic('error','Erreur auto-run tests', String(err)); }
+        resolve(id);
+      };
       tx.onerror = ()=>{ appendDiagnostic('error','Échec import DB', String(tx.error)); reject(tx.error); };
     });
   }catch(e){ appendDiagnostic('error','Import invalide', String(e)); alert('Import invalide: '+e.message); return null; }
