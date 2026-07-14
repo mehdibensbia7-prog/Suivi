@@ -741,7 +741,42 @@ document.getElementById('exportAuditBtn').addEventListener('click', async ()=>{
 document.getElementById('sessionsBtn').addEventListener('click', ()=> showSessionsModal());
 document.getElementById('refreshSessionsBtn').addEventListener('click', ()=> loadAndRenderSessions());
 document.getElementById('createSessionBtn').addEventListener('click', async ()=>{ const name = prompt('Nom de la nouvelle session'); if(!name) return; await openSippDB(); const meta = await createSession(name); loadAndRenderSessions(); setStatus('Session créée: '+meta.name,'ok'); });
-document.getElementById('importSessionFile').addEventListener('change', async function(e){ const f = this.files[0]; if(!f) return; await importSessionJSON(f); this.value=''; });
+document.getElementById('importSessionFile').addEventListener('change', async function(e){
+  const f = this.files[0]; if(!f) return; this.value='';
+  try{
+    const txt = await f.text();
+    let parsed;
+    try{ parsed = JSON.parse(txt); }catch(e){ parsed = null; }
+    if(parsed && parsed.meta && parsed.lines){ // plain session JSON
+      await importSessionJSON(new File([txt], f.name, {type:'application/json'}));
+      return;
+    }
+    // if looks like encrypted payload
+    if(parsed && parsed.salt && parsed.iv && parsed.ct){
+      const pass = prompt('Passphrase pour déchiffrer l\'import');
+      if(!pass) { alert('Passphrase requise'); return; }
+      const clear = await decryptPayload(parsed, pass);
+      const payload = JSON.parse(clear);
+      // create a File-like object for importSessionJSON
+      await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,'')+'.json', {type:'application/json'}));
+      return;
+    }
+    // fallback: try to parse as session JSON raw
+    try{ const payload = JSON.parse(txt); await importSessionJSON(new File([JSON.stringify(payload)], f.name, {type:'application/json'})); }catch(err){ alert('Fichier d\'import invalide'); }
+  }catch(e){ alert('Erreur import: '+e.message); }
+});
+
+async function decryptPayload(payload, pass){
+  const salt = payload.salt;
+  const iv = new Uint8Array(payload.iv);
+  const ctStr = atob(payload.ct);
+  const ctArr = new Uint8Array(ctStr.length);
+  for(let i=0;i<ctStr.length;i++) ctArr[i] = ctStr.charCodeAt(i);
+  const key = await deriveKeyFromPass(pass, salt);
+  const plainBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ctArr.buffer);
+  const dec = new TextDecoder();
+  return dec.decode(plainBuf);
+}
 
 /* ============================= DÉTECTION DES 2 TABLES (sur tout le classeur) ============================= */
 // Table A = suivi commercial (formulaire agents). Table B = export CRM (statuts contrats).
@@ -1032,7 +1067,18 @@ function createSession(name){
 }
 
 function getCurrentSessionId(){ return localStorage.getItem('sipp.currentSessionId') || null; }
-function setCurrentSessionId(id){ localStorage.setItem('sipp.currentSessionId', id); }
+async function setCurrentSessionId(id){
+  localStorage.setItem('sipp.currentSessionId', id);
+  try{
+    await openSippDB();
+    const lignes = await getAllLignesForSession(id);
+    // replace in-memory rawLignes and re-run renders
+    rawLignes = (lignes||[]).map(l=>Object.assign({}, l));
+    // rebuild any caches if needed
+    renderAll();
+    setStatus('Session chargée: '+(id||'null'),'ok');
+  }catch(e){ console.warn('Erreur chargement session', e); setStatus('Erreur chargement session','error'); }
+}
 
 function getAllLignesForSession(sessionId){
   return new Promise((resolve,reject)=>{
@@ -1170,7 +1216,18 @@ async function importSessionJSON(file){ const txt = await file.text(); try{ cons
 // simple encryption POC using WebCrypto
 async function deriveKeyFromPass(pass, salt){ const enc = new TextEncoder(); const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pass), {name:'PBKDF2'}, false, ['deriveKey']); return crypto.subtle.deriveKey({name:'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash:'SHA-256'}, keyMaterial, {name:'AES-GCM', length:256}, true, ['encrypt','decrypt']); }
 
-async function encryptAndDownload(plaintext, pass, filename){ const iv = crypto.getRandomValues(new Uint8Array(12)); const salt = (Math.random()+''+Date.now()).slice(2,12); const key = await deriveKeyFromPass(pass, salt); const enc = new TextEncoder(); const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, enc.encode(plaintext)); const blob = new Blob([salt, '::', Array.from(iv).join(','), '::', new Uint8Array(ct).buffer],[{type:'application/octet-stream'}]); const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); }
+async function encryptAndDownload(plaintext, pass, filename){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const salt = (Math.random()+''+Date.now()).slice(2,12);
+  const key = await deriveKeyFromPass(pass, salt);
+  const enc = new TextEncoder();
+  const ctBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, enc.encode(plaintext));
+  const ctArr = new Uint8Array(ctBuf);
+  const ctB64 = btoa(String.fromCharCode(...ctArr));
+  const payload = { salt, iv: Array.from(iv), ct: ctB64 };
+  const blob = new Blob([JSON.stringify(payload)],{type:'application/json'});
+  const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+}
 
 
 /* ============================= MOTEUR DE CALCUL ============================= */
