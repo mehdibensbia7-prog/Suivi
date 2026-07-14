@@ -404,6 +404,7 @@
       <div style="display:flex;gap:8px;margin-bottom:8px">
         <button class="btn" id="createSessionBtn">Nouvelle session</button>
         <label class="btn file-btn" style="background:var(--panel);border:1px solid var(--line);">Importer session<input type="file" id="importSessionFile" accept="application/json" style="display:none"></label>
+        <label class="btn file-btn" style="background:var(--panel);border:1px solid var(--line);">Importer session chiffrée<input type="file" id="importEncryptedFile" accept=".enc,.json.enc" style="display:none"></label>
         <button class="btn" id="refreshSessionsBtn">Rafraîchir</button>
       </div>
       <div id="sessionsList" style="max-height:45vh;overflow:auto"></div>
@@ -780,6 +781,20 @@ document.getElementById('importSessionFile').addEventListener('change', async fu
     // fallback: try to parse as session JSON raw
     try{ const payload = JSON.parse(txt); await importSessionJSON(new File([JSON.stringify(payload)], f.name, {type:'application/json'})); }catch(err){ alert('Fichier d\'import invalide'); }
   }catch(e){ alert('Erreur import: '+e.message); }
+});
+
+// explicit encrypted import button handler
+document.getElementById('importEncryptedFile').addEventListener('change', async function(e){
+  const f = this.files[0]; this.value=''; if(!f) return;
+  try{
+    const txt = await f.text();
+    let parsed; try{ parsed = JSON.parse(txt); }catch(e){ alert('Fichier chiffré invalide'); return; }
+    if(!(parsed && parsed.salt && parsed.iv && parsed.ct)){ alert('Format chiffré inattendu'); return; }
+    const pass = prompt('Passphrase pour déchiffrer l\'import chiffré'); if(!pass) { alert('Passphrase requise'); return; }
+    const clear = await decryptPayload(parsed, pass);
+    const payload = JSON.parse(clear);
+    await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,''), {type:'application/json'}));
+  }catch(e){ alert('Erreur import chiffré: '+e.message); }
 });
 
 async function decryptPayload(payload, pass){
