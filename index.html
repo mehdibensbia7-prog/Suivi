@@ -1,1494 +1,263 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
-<meta name="referrer" content="no-referrer">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SIPP — Pilotage Ventes MINT & ConsoPilote</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
-<script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
-<style>
-  :root{
-    --bg:#0b1220; --panel:#111c2f; --panel2:#0e1830; --line:#1f2f4a;
-    --ink:#e7edf7; --ink-dim:#8ea0bd; --mint:#3fd6a4; --amber:#e8a83f;
-    --red:#e8556f; --blue:#5b9bf2;
-    --mono:'JetBrains Mono','Fira Code',ui-monospace,SFMono-Regular,Consolas,monospace;
-    --sans:'Inter','Segoe UI',system-ui,sans-serif;
-  }
-  *{box-sizing:border-box;}
-  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);}
-  header{padding:22px 28px 14px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:20;}
-  header .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--mint);text-transform:uppercase;}
-  header h1{margin:4px 0 2px;font-size:22px;font-weight:700;letter-spacing:-.01em;}
-  header p{margin:0;color:var(--ink-dim);font-size:13px;}
-  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:16px 28px;border-bottom:1px solid var(--line);background:var(--panel2);}
-  .toolbar label.file-btn{background:var(--mint);color:#06251c;font-weight:600;padding:9px 16px;border-radius:7px;cursor:pointer;font-size:13px;}
-  .toolbar input[type=file]{display:none;}
-  select, .btn{background:var(--panel);color:var(--ink);border:1px solid var(--line);padding:9px 12px;border-radius:7px;font-size:13px;cursor:pointer;}
-  .btn.primary{background:var(--blue);border-color:var(--blue);color:#061223;font-weight:600;}
-  .btn.ghost{background:transparent;}
-  .btn.warn{border-color:var(--amber);color:var(--amber);}
-  #status-msg{font-family:var(--mono);font-size:12px;color:var(--ink-dim);}
-  #status-msg.error{color:var(--red);}
-  #status-msg.warn{color:var(--amber);}
-  #status-msg.ok{color:var(--mint);}
-  .nav{display:flex;gap:6px;padding:14px 28px 0;border-bottom:1px solid var(--line);background:var(--bg);}
-  .nav button{background:transparent;border:none;color:var(--ink-dim);padding:10px 16px;font-size:13px;font-weight:600;border-bottom:2px solid transparent;cursor:pointer;}
-  .nav button.active{color:var(--mint);border-bottom-color:var(--mint);}
-  main{padding:20px 28px 60px;}
-  .tab{display:none;}
-  .tab.active{display:block;}
-  .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px;}
-  .stat-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
-  .stat-card .label{font-size:11px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.06em;font-family:var(--mono);}
-  .stat-card .value{font-size:22px;font-weight:700;margin-top:4px;font-family:var(--mono);}
-  .stat-card.mint .value{color:var(--mint);}
-  .stat-card.amber .value{color:var(--amber);}
-  .stat-card.red .value{color:var(--red);}
-  .stat-card.blue .value{color:var(--blue);}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:18px;}
-  .panel h2{margin:0 0 12px;font-size:15px;}
-  .panel h2 .sub{color:var(--ink-dim);font-weight:400;font-size:12px;}
-  #banner-error{display:none;background:#2a1420;border:1px solid var(--red);color:var(--red);padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;font-family:var(--mono);white-space:pre-wrap;}
-  .legend{font-size:12px;color:var(--ink-dim);margin-top:8px;}
-  .legend b{color:var(--ink);}
-  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
-  .empty{padding:40px;text-align:center;color:var(--ink-dim);font-size:13px;}
-  footer{padding:20px 28px;color:var(--ink-dim);font-size:11px;font-family:var(--mono);border-top:1px solid var(--line);}
-  .tabulator{background:transparent;border:none;font-size:12.5px;}
-  .tabulator-row{background:var(--panel2);}
-  .tabulator-row.tabulator-row-even{background:#0d1728;}
-  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;font-family:var(--mono);}
-  .tag.ok{background:#0d3327;color:var(--mint);}
-  .tag.warn{background:#3a2a10;color:var(--amber);}
-  .tag.bad{background:#3a1520;color:var(--red);}
-  .cal-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
-  .cal-month-label{font-family:var(--mono);font-size:14px;font-weight:700;min-width:160px;text-align:center;}
-  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;}
-  .cal-dow{font-family:var(--mono);font-size:11px;color:var(--ink-dim);text-align:center;padding:4px 0;text-transform:uppercase;}
-  .cal-cell{background:var(--panel2);border:1px solid var(--line);border-radius:8px;min-height:64px;padding:6px;position:relative;}
-  .cal-cell.empty{background:transparent;border-color:transparent;}
-  .cal-cell .cal-daynum{font-size:11px;color:var(--ink-dim);}
-  .cal-cell.friday{cursor:pointer;transition:transform .1s;}
-  .cal-cell.friday:hover{transform:translateY(-1px);border-color:var(--mint);}
-  .cal-cell.friday.due{border-color:var(--red);}
-  .cal-cell.friday.paid{border-color:var(--mint);}
-  .cal-cell.friday.selected{outline:2px solid var(--blue);}
-  .cal-amount{font-family:var(--mono);font-size:12px;font-weight:700;margin-top:6px;}
-  .cal-amount.due{color:var(--red);}
-  .cal-amount.paid{color:var(--mint);}
-  .cal-amount.none{color:var(--ink-dim);font-weight:400;}
-  .cal-decom-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red);vertical-align:middle;}
-  .cal-cell .cal-decom-badge{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:var(--red);}
+/**
+ * =========================================================================
+ * SIPP — ENGINE DE PILOTAGE DES VENTES MINT & CONSO PILOTE (V2.0)
+ * =========================================================================
+ * Système unifié : Traitement multi-feuilles, Rapprochement par ID contrat,
+ * Règle de non-réversibilité comptable & Moteur transactionnel sécurisé.
+ */
 
-  /* --- Tableaux : scroll horizontal au lieu d'écraser les colonnes sur petit écran --- */
-  .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:8px;}
-  .table-scroll .tabulator{min-width:600px;}
-
-  /* --- Cibles tactiles confortables partout --- */
-  button, select, .btn, .file-btn{min-height:42px;touch-action:manipulation;}
-  input[type=file]{touch-action:manipulation;}
-
-  /* --- Nav en bandeau défilable horizontalement (mobile/tablette) --- */
-  .nav{overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap;scrollbar-width:thin;}
-  .nav button{flex:0 0 auto;white-space:nowrap;}
-
-  /* ===================== TABLETTE (≤ 1024px) ===================== */
-  @media (max-width:1024px){
-    header, .toolbar, .nav, main, footer{padding-left:18px;padding-right:18px;}
-    .summary-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
-  }
-
-  /* ===================== MOBILE (≤ 640px) ===================== */
-  @media (max-width:640px){
-    header, .toolbar, .nav, main, footer{padding-left:12px;padding-right:12px;}
-    header{padding-top:16px;padding-bottom:10px;}
-    header h1{font-size:18px;}
-    header p{font-size:12px;}
-    .toolbar{padding-top:12px;padding-bottom:12px;gap:8px;}
-    .toolbar label.file-btn, .toolbar .btn{font-size:12.5px;padding:9px 12px;}
-    .nav{padding-top:10px;}
-    .nav button{font-size:12.5px;padding:9px 12px;}
-    main{padding-top:14px;}
-    .panel{padding:12px;}
-    .panel h2{font-size:14px;}
-    .stat-card{padding:12px;}
-    .stat-card .value{font-size:18px;}
-    .cal-toolbar{gap:6px;}
-    .cal-toolbar .btn{font-size:11.5px;padding:8px 10px;}
-    .cal-month-label{min-width:auto;width:100%;order:-1;margin-bottom:4px;}
-    .cal-grid{gap:4px;}
-    .cal-dow{font-size:9.5px;padding:2px 0;}
-    .cal-cell{min-height:48px;padding:4px;border-radius:6px;}
-    .cal-cell .cal-daynum{font-size:10px;}
-    .cal-amount{font-size:9.5px;margin-top:3px;line-height:1.2;}
-    .filters{gap:6px;}
-    .filters select, .filters .btn{font-size:12px;padding:8px 10px;}
-  }
-
-  /* ===================== ÉCRAN DE CONNEXION ===================== */
-  .login-overlay{position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px;}
-  .login-box{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px;}
-  .role-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
-  .role-btn{background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:14px 10px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;min-height:44px;}
-  .role-btn:hover{border-color:var(--mint);color:var(--mint);}
-  .role-btn.selected{border-color:var(--mint);background:#0d3327;color:var(--mint);}
-  .login-input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:11px 12px;border-radius:7px;font-size:14px;font-family:var(--mono);}
-  .login-error{color:var(--red);font-size:12px;font-family:var(--mono);margin-top:8px;min-height:16px;}
-  .role-badge{font-family:var(--mono);font-size:11px;padding:6px 12px;border-radius:20px;background:#0d3327;color:var(--mint);border:1px solid var(--mint);white-space:nowrap;}
-  .confidential-banner{background:#241407;color:var(--amber);border-bottom:1px solid var(--amber);font-size:11.5px;font-family:var(--mono);padding:6px 28px;text-align:center;}
-</style>
-</head>
-<body>
-
-<div id="loginOverlay" class="login-overlay">
-  <div class="login-box">
-    <div class="eyebrow" style="color:var(--mint)">SIPP · Accès sécurisé</div>
-    <h1 style="margin:6px 0 4px;font-size:20px;">Connexion</h1>
-    <p style="color:var(--ink-dim);font-size:13px;margin:0 0 18px;">Sélectionnez votre profil et saisissez votre code d'accès.</p>
-    <div id="roleButtons" class="role-grid">
-      <button class="role-btn" data-role="superadmin">Super Admin</button>
-      <button class="role-btn" data-role="directeur">Directeur</button>
-      <button class="role-btn" data-role="associes">Associés</button>
-      <button class="role-btn" data-role="qualite">Qualité</button>
-      <button class="role-btn" data-role="agent">Agent</button>
-    </div>
-    <div id="loginStep2" style="display:none;margin-top:16px;">
-      <div id="loginRoleLabel" style="font-family:var(--mono);font-size:12px;color:var(--mint);margin-bottom:8px;"></div>
-      <input type="password" id="loginCode" placeholder="Code d'accès" class="login-input">
-      <div id="agentNameStep" style="display:none;margin-top:10px;">
-        <input type="text" id="agentNameInput" placeholder="Votre nom exact (tel que saisi par le manager)" class="login-input">
-      </div>
-      <div id="loginError" class="login-error"></div>
-      <button class="btn primary" id="loginSubmit" style="width:100%;margin-top:12px;">Se connecter</button>
-      <button class="btn ghost" id="loginBack" style="width:100%;margin-top:8px;">‹ Retour</button>
-    </div>
-  </div>
-</div>
-
-<div id="appRoot" style="display:none;">
-
-<header>
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-    <div>
-      <div class="eyebrow">SIPP · Direction d'Exploitation & de Production</div>
-      <h1>Pilotage Ventes — MINT & ConsoPilote</h1>
-      <p>Import du fichier de suivi brut → extraction automatique des contrats → moteur de commissions → trésorerie agent.</p>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span id="roleBadge" class="role-badge"></span>
-      <button class="btn ghost" id="logoutBtn">Déconnexion</button>
-    </div>
-  </div>
-</header>
-<div class="confidential-banner">🔒 Données confidentielles — usage interne uniquement. Ne jamais partager le fichier importé, l'export d'état (.json) ou l'export trésorerie (.xlsx) hors de l'entreprise.</div>
-
-<div class="toolbar" id="mainToolbar">
-  <label class="file-btn">Importer le fichier .xlsx<input type="file" id="fileInput" accept=".xlsx,.xls"></label>
-  <select id="sheetSelector"><option value="">Feuille…</option></select>
-  <span style="width:1px;height:22px;background:var(--line);"></span>
-  <button class="btn" id="exportOverridesBtn">Exporter l'état (JSON)</button>
-  <label class="btn file-btn" id="stateInputLabel" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);">Importer l'état<input type="file" id="stateInput" accept=".json"></label>
-  <button class="btn primary" id="exportFinanceBtn">Exporter Trésorerie (.xlsx)</button>
-  <span id="status-msg"></span>
-</div>
-
-<div class="nav">
-  <button class="navbtn active" data-tab="suivi">Suivi Opérationnel</button>
-  <button class="navbtn" data-tab="finance">Trésorerie & Commissions</button>
-  <button class="navbtn" data-tab="calendrier">Calendrier de Paie</button>
-  <button class="navbtn" data-tab="kpi">KPI Agents</button>
-  <button class="navbtn" data-tab="alertes">Alertes & Compliance</button>
-  <button class="navbtn" data-tab="qualite">Suivi Qualité</button>
-  <button class="navbtn" data-tab="mesventes">Mes Ventes</button>
-</div>
-
-<main>
-  <div id="banner-error"></div>
-
-  <div class="tab active" id="tab-suivi">
-    <div class="panel">
-      <h2>Ventes brutes détectées <span class="sub">— table agents (Google Form) rapprochée avec l'export CRM (statuts)</span></h2>
-      <div id="table-suivi" class="table-scroll"></div>
-      <div class="legend">Un contrat MINT est reconnu par toute séquence de <b>5 à 7 chiffres</b> trouvée dans la colonne « Numéro Contrat Energie » — séparateurs acceptés : espace, <code>/</code>, <code>-</code>, <code>//</code>, <code>_</code>. Chaque séquence = 1 vente MINT distincte. La colonne « Numéro Contrat ConsoPilote » (si non vide, non nulle, non « * ») déclenche une vente ConsoPilote.</div>
-    </div>
-  </div>
-
-  <div class="tab" id="tab-finance">
-    <div class="summary-grid" id="finance-summary"></div>
-    <div class="panel">
-      <h2>Échéancier de paie — Brut MINT <span class="sub">chaque vendredi qui suit la date de vente ; cliquez le vendredi dans le filtre ci-dessous pour isoler les lignes à régler</span></h2>
-      <div id="table-payroll" class="table-scroll"></div>
-    </div>
-    <div class="panel">
-      <h2>Détail par contrat <span class="sub">— éditez « Statut Brut », « Statut Activation » et « Décommissionné » directement dans le tableau. Marquer « Payé » avant le vendredi de paie officiel = avance, automatiquement signalée.</span></h2>
-      <div class="filters">
-        <select id="filterAgent"><option value="">Tous les agents</option></select>
-        <select id="filterType"><option value="">MINT + ConsoPilote</option><option value="MINT">MINT seul</option><option value="CONSO">ConsoPilote seul</option></select>
-        <select id="filterVendredi"><option value="">Tous les vendredis</option></select>
-        <select id="filterStatutPaie"><option value="">Tous statuts Brut</option><option value="Payé">Brut Payé</option><option value="Non Payé">Brut Non Payé</option></select>
-      </div>
-      <div id="table-finance" class="table-scroll"></div>
-    </div>
-  </div>
-
-  <div class="tab" id="tab-kpi">
-    <div class="panel">
-      <h2>Performance par agent</h2>
-      <div id="table-kpi" class="table-scroll"></div>
-    </div>
-  </div>
-
-  <div class="tab" id="tab-calendrier">
-    <div class="panel">
-      <h2>Calendrier de paie <span class="sub">— les vendredis en couleur portent une vente MINT à régler. Cliquez un vendredi pour voir le détail par agent.</span></h2>
-      <div class="cal-toolbar">
-        <button class="btn" id="calPrev">‹ Mois précédent</button>
-        <button class="btn" id="calNext">Mois suivant ›</button>
-        <span style="width:1px;height:20px;background:var(--line);"></span>
-        <button class="btn" id="calWeekPrev">‹ Vendredi précédent</button>
-        <span id="calMonthLabel" class="cal-month-label"></span>
-        <button class="btn" id="calWeekNext">Vendredi suivant ›</button>
-        <span style="width:1px;height:20px;background:var(--line);"></span>
-        <button class="btn" id="calToday">Aujourd'hui</button>
-      </div>
-      <div id="calendar-grid" class="cal-grid"></div>
-      <div class="legend">
-        <span class="tag bad">rouge</span> = brut restant à payer &nbsp;
-        <span class="tag ok">vert</span> = tout payé pour ce vendredi &nbsp;
-        <span class="cal-decom-dot"></span> = décommissions survenues cette semaine
-      </div>
-    </div>
-    <div class="panel" id="calDetailPanel" style="display:none;">
-      <h2 id="calDetailTitle">Détail du vendredi</h2>
-      <div class="filters">
-        <button class="btn primary" id="calMarkAllPaid">Marquer tout « Payé » pour ce vendredi</button>
-        <button class="btn warn" id="calMarkAllUnpaid">Réinitialiser « Non Payé »</button>
-      </div>
-      <div id="table-cal-detail" class="table-scroll"></div>
-    </div>
-  </div>
-
-  <div class="tab" id="tab-alertes">
-    <div class="panel">
-      <h2>Contrats à surveiller <span class="sub">— non trouvés dans l'export CRM, en attente, ou proches de l'échéance clawback (3 mois)</span></h2>
-      <div id="table-alertes" class="table-scroll"></div>
-    </div>
-  </div>
-
-  <div class="tab" id="tab-qualite">
-    <div class="panel">
-      <h2>Suivi Qualité <span class="sub">— aucune donnée financière affichée. Droit de statuer sur une annulation de contrat pour raison qualité uniquement.</span></h2>
-      <div class="filters">
-        <select id="qualiteFilterAgent"><option value="">Tous les agents</option></select>
-        <select id="qualiteFilterStatut"><option value="">Tous statuts</option><option value="actif">Actif / en cours</option><option value="annule_qualite">Annulé (qualité)</option><option value="revue">⚠ Revue requise</option></select>
-      </div>
-      <div id="table-qualite" class="table-scroll"></div>
-    </div>
-  </div>
-
-  <div class="tab" id="tab-mesventes">
-    <div class="panel">
-      <h2>Mes ventes <span id="mesVentesAgentLabel" class="sub"></span></h2>
-      <div class="summary-grid" id="mesventes-summary"></div>
-    </div>
-    <div class="panel">
-      <h2>Détail de mes contrats</h2>
-      <div id="table-mesventes" class="table-scroll"></div>
-    </div>
-    <div class="panel">
-      <h2>Ce que je vais recevoir — par vendredi</h2>
-      <div id="table-mesventes-semaine" class="table-scroll"></div>
-    </div>
-    <div class="panel">
-      <h2>Ce que je vais recevoir — par mois</h2>
-      <div id="table-mesventes-mois" class="table-scroll"></div>
-    </div>
-  </div>
-</main>
-
-<footer>SIPP v1 — moteur de calcul 100% client-side (aucune donnée envoyée à un serveur). Règles de commissionnement : voir cahier des charges.</footer>
-
-<script>
-/* ============================= ÉTAT GLOBAL ============================= */
-let workbook = null;
-let rawLignes = [];       // toutes les lignes-contrat calculées (MINT + CONSO)
-let overrides = {};       // { lineId: { statutPaiementBrut, statutPaiementActivation, datePaiementBrut, decommissionManuel, motifQualite, statutPaiement (CONSO) } }
-let tSuivi, tFinance, tKPI, tAlertes, tQualite, tMesVentes, tMesVentesSemaine, tMesVentesMois;
-
-const STATUTS_CHUTE = ['annulee','annule','retractee','retracte','resilie','resiliee','refuse','refusee'];
-const norm = s => (s==null?'':String(s)).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
-
-/* ============================= RÔLES & PERMISSIONS =============================
-   ⚠ Contrôle d'accès CÔTÉ CLIENT uniquement (page statique, sans serveur).
-   Cela structure l'usage et évite les erreurs de manipulation entre profils,
-   mais CE N'EST PAS UNE SÉCURITÉ INFORMATIQUE : quiconque sait ouvrir la console
-   du navigateur (F12) peut exécuter `currentRole='superadmin'; applyRolePermissions();`
-   et contourner entièrement cet écran. Pour une vraie protection de données sensibles,
-   il faut un serveur avec authentification réelle (voir note de sécurité fournie).
-   Les codes ne sont plus stockés en clair mais en empreinte SHA-256 (non réversible
-   à la simple lecture du code source — mais toujours contournable via la console).
-   → Pour changer un code : ouvrez la console du navigateur et exécutez
-     crypto.subtle.digest('SHA-256', new TextEncoder().encode('MON-NOUVEAU-CODE'))
-       .then(b=>console.log(Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')))
-     puis collez le résultat ci-dessous à la place du hash correspondant. */
-const ROLE_CODE_HASHES = {
-  superadmin: 'aef41367427d6061c8ab191f263dcf0ed40de4e96a5c22cc548d17fd4549b0cb', // SUPER-2026
-  directeur:  '860d72cfe36e939072592263bb45fe06fb8865c93e8b528fb07814788407779c', // DIRECTION-2026
-  associes:   '6e0131726026bc076bb2914f5c1fb6541dd4bf6559be6d351209416413322db6', // ASSOCIES-2026
-  qualite:    'e56f28e0ed0dea773a5cfd69d4099f91c79a8b5f529dd47793a76aa8b8f4e055', // QUALITE-2026
-  agent:      'a5205dc5bc2d999a16f59c5f3d4fedc6d69ac0989d755d41eef71c04389eb38e'  // AGENT-2026
-};
-async function sha256Hex(str){
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(x=>x.toString(16).padStart(2,'0')).join('');
-}
-const ROLE_LABELS = {
-  superadmin:'Super Admin', directeur:'Directeur', associes:'Associés', qualite:'Qualité', agent:'Agent'
-};
-const PERM = {
-  superadmin: {tabs:['suivi','finance','calendrier','kpi','alertes','qualite'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi'},
-  directeur:  {tabs:['suivi','finance','calendrier','kpi','alertes','qualite'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi'},
-  associes:   {tabs:['finance','calendrier'],                                   editFinance:false, editQuality:false, manageState:false, defaultTab:'finance'},
-  qualite:    {tabs:['qualite','alertes'],                                      editFinance:false, editQuality:true,  manageState:true,  defaultTab:'qualite'},
-  agent:      {tabs:['mesventes'],                                              editFinance:false, editQuality:false, manageState:false, defaultTab:'mesventes'}
-};
-let currentRole = null;
-let currentAgentName = null;
-function canEditFinance(){ return currentRole && PERM[currentRole].editFinance; }
-function canEditQuality(){ return currentRole && PERM[currentRole].editQuality; }
-
-// --- anti-brute-force basique : ralentit les essais répétés (dissuasion, pas une protection réelle) ---
-let failedAttempts = 0;
-let lockedUntil = 0;
-
-let selectedRole = null;
-document.querySelectorAll('.role-btn').forEach(b=>{
-  b.addEventListener('click', ()=>{
-    document.querySelectorAll('.role-btn').forEach(x=>x.classList.remove('selected'));
-    b.classList.add('selected');
-    selectedRole = b.dataset.role;
-    document.getElementById('loginRoleLabel').textContent = 'Profil : ' + ROLE_LABELS[selectedRole];
-    document.getElementById('loginStep2').style.display = 'block';
-    document.getElementById('agentNameStep').style.display = selectedRole==='agent' ? 'block' : 'none';
-    document.getElementById('loginError').textContent = '';
-    document.getElementById('loginCode').value = '';
-    document.getElementById('loginCode').focus();
-  });
-});
-document.getElementById('loginBack').addEventListener('click', ()=>{
-  document.getElementById('loginStep2').style.display = 'none';
-  document.querySelectorAll('.role-btn').forEach(x=>x.classList.remove('selected'));
-  selectedRole = null;
-});
-document.getElementById('loginSubmit').addEventListener('click', doLogin);
-document.getElementById('loginCode').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
-
-async function doLogin(){
-  const err = document.getElementById('loginError');
-  if(Date.now() < lockedUntil){
-    err.textContent = `Trop d'essais — réessayez dans ${Math.ceil((lockedUntil-Date.now())/1000)}s.`;
-    return;
-  }
-  if(!selectedRole){ err.textContent = 'Sélectionnez un profil.'; return; }
-  const code = document.getElementById('loginCode').value.trim();
-  const hash = await sha256Hex(code);
-  if(hash !== ROLE_CODE_HASHES[selectedRole]){
-    failedAttempts++;
-    if(failedAttempts>=5){
-      lockedUntil = Date.now() + 30000;
-      failedAttempts = 0;
-      err.textContent = 'Trop d\'essais — verrouillé 30 secondes.';
-    } else {
-      err.textContent = `Code incorrect (${failedAttempts}/5).`;
-    }
-    return;
-  }
-  failedAttempts = 0;
-  if(selectedRole==='agent'){
-    const nom = document.getElementById('agentNameInput').value.trim();
-    if(!nom){ err.textContent = 'Indiquez votre nom.'; return; }
-    currentAgentName = nom;
-  }
-  currentRole = selectedRole;
-  document.getElementById('loginOverlay').style.display = 'none';
-  document.getElementById('appRoot').style.display = 'block';
-  document.getElementById('roleBadge').textContent = ROLE_LABELS[currentRole] + (currentAgentName ? ' · '+currentAgentName : '');
-  applyRolePermissions();
-  resetInactivityTimer();
-}
-function doLogout(reason){
-  currentRole = null; currentAgentName = null; selectedRole = null;
-  // purge des données sensibles chargées en mémoire pour cette session
-  rawLignes = []; overrides = {};
-  document.getElementById('appRoot').style.display = 'none';
-  document.getElementById('loginOverlay').style.display = 'flex';
-  document.getElementById('loginStep2').style.display = 'none';
-  document.querySelectorAll('.role-btn').forEach(x=>x.classList.remove('selected'));
-  document.getElementById('fileInput').value = '';
-  document.getElementById('sheetSelector').innerHTML = '<option value="">Feuille…</option>';
-  if(reason) setTimeout(()=>{ const e=document.getElementById('loginError'); if(e) e.textContent = reason; }, 50);
-  clearTimeout(inactivityTimer);
-}
-document.getElementById('logoutBtn').addEventListener('click', ()=> doLogout());
-
-// --- déconnexion automatique après inactivité (protège les postes partagés/non surveillés) ---
-const INACTIVITY_LIMIT_MS = 15*60*1000; // 15 minutes
-let inactivityTimer = null;
-function resetInactivityTimer(){
-  clearTimeout(inactivityTimer);
-  if(!currentRole) return;
-  inactivityTimer = setTimeout(()=> doLogout('Session expirée après 15 minutes d\'inactivité — reconnectez-vous.'), INACTIVITY_LIMIT_MS);
-}
-['click','keydown','mousemove','touchstart','scroll'].forEach(evt=>{
-  document.addEventListener(evt, ()=>{ if(currentRole) resetInactivityTimer(); }, {passive:true});
-});
-
-function applyRolePermissions(){
-  if(!currentRole) return;
-  const p = PERM[currentRole];
-  document.querySelectorAll('.navbtn').forEach(b=>{
-    const allowed = p.tabs.includes(b.dataset.tab);
-    b.style.display = allowed ? '' : 'none';
-  });
-  document.querySelectorAll('.navbtn').forEach(x=>x.classList.remove('active'));
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-  const def = document.querySelector(`.navbtn[data-tab="${p.defaultTab}"]`);
-  if(def) def.classList.add('active');
-  document.getElementById('tab-'+p.defaultTab).classList.add('active');
-
-  document.getElementById('exportOverridesBtn').style.display = p.manageState ? '' : 'none';
-  document.getElementById('stateInputLabel').style.display = p.manageState ? '' : 'none';
-  document.getElementById('exportFinanceBtn').style.display = p.tabs.includes('finance') ? '' : 'none';
-
-  if(rawLignes.length){ renderQualite(); renderMesVentes(); if(p.defaultTab==='calendrier') renderCalendar(); }
+// Initialisation sécurisée de l'état global de l'application
+if (!window.appContractsState) {
+    window.appContractsState = {};
 }
 
-/* ============================= UI: NAV & MESSAGES ============================= */
-document.querySelectorAll('.navbtn').forEach(b=>{
-  b.addEventListener('click', ()=>{
-    document.querySelectorAll('.navbtn').forEach(x=>x.classList.remove('active'));
-    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    document.getElementById('tab-'+b.dataset.tab).classList.add('active');
-    if(b.dataset.tab==='calendrier' && rawLignes.length) renderCalendar();
-    if(b.dataset.tab==='qualite' && rawLignes.length) renderQualite();
-    if(b.dataset.tab==='mesventes' && rawLignes.length) renderMesVentes();
-  });
-});
-function setStatus(msg, kind){
-  const el = document.getElementById('status-msg');
-  el.textContent = msg; el.className = kind||'';
-}
-function showError(msg){
-  const el = document.getElementById('banner-error');
-  el.style.display='block'; el.textContent = '⚠ ' + msg;
-}
-function clearError(){
-  document.getElementById('banner-error').style.display='none';
+/**
+ * 1. CLASSIFICATION INTELLIGENTE DU STATUT "PAYÉ"
+ * Gère les variantes d'écriture, accents, et casses.
+ */
+function isStatusPaid(statusValue) {
+    if (statusValue === undefined || statusValue === null) return false;
+    
+    const normalized = String(statusValue)
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, ""); // Supprime les accents (ex: "payé" -> "paye")
+
+    const paidKeywords = ["paye", "payee", "regle", "solde", "encaisse", "valide", "complete"];
+    return paidKeywords.some(keyword => normalized.includes(keyword)) && !normalized.includes("non");
 }
 
-/* ============================= IMPORT FICHIER ============================= */
-document.getElementById('fileInput').addEventListener('change', function(e){
-  const file = e.target.files[0];
-  if(!file) return;
-  clearError();
-  setStatus('Lecture du fichier…');
-  const reader = new FileReader();
-  reader.onload = function(ev){
-    try{
-      const data = new Uint8Array(ev.target.result);
-      workbook = XLSX.read(data, {type:'array', cellDates:true});
-      const sel = document.getElementById('sheetSelector');
-      sel.innerHTML = '<option value="">Feuille…</option>';
-      workbook.SheetNames.forEach(n=>{
-        const o = document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o);
-      });
-      if(workbook.SheetNames.length){ sel.value = workbook.SheetNames[0]; autoDetectAndProcess(); }
-      setStatus('Fichier chargé : '+file.name, 'ok');
-    }catch(err){
-      showError('Impossible de lire le fichier : '+err.message);
-      setStatus('Échec de lecture', 'error');
-    }
-  };
-  reader.onerror = ()=>{ showError('Erreur de lecture disque du fichier.'); };
-  reader.readAsArrayBuffer(file);
-});
-// la liste déroulante sert d'information / d'inspection manuelle ; elle ne relance PAS un parsing
-// partiel — l'import scanne systématiquement TOUT le classeur (le fichier peut avoir la table de
-// suivi et l'export CRM sur la même feuille, empilés, OU sur deux feuilles séparées).
-document.getElementById('sheetSelector').addEventListener('change', ()=>{
-  const name = document.getElementById('sheetSelector').value;
-  if(name) renderRawSheetPreview(name);
-});
-
-/* ============================= DÉTECTION DES 2 TABLES (sur tout le classeur) ============================= */
-// Table A = suivi commercial (formulaire agents). Table B = export CRM (statuts contrats).
-// Elles peuvent être : (1) empilées dans la même feuille, ou (2) sur deux feuilles distinctes.
-function findHeaderIndex(rows, candidates){
-  for(let i=0;i<rows.length;i++){
-    const row = rows[i] || [];
-    for(const cell of row){
-      const c = norm(cell);
-      if(candidates.some(cand => c === norm(cand))) return i;
-    }
-  }
-  return -1;
-}
-function colIndexByNames(header, names){
-  // 1) correspondance exacte d'abord
-  for(const name of names){
-    const target = norm(name);
-    for(let i=0;i<header.length;i++){
-      if(norm(header[i]) === target) return i;
-    }
-  }
-  // 2) repli tolérant : préfixe commun (gère les libellés tronqués/variables entre exports CRM,
-  //    ex. "REF SOUSCRIPTI" vs "REF SOUSCRIPTION")
-  for(const name of names){
-    const target = norm(name);
-    for(let i=0;i<header.length;i++){
-      const h = norm(header[i]);
-      if(h && target && (h.startsWith(target) || target.startsWith(h))) return i;
-    }
-  }
-  return -1;
-}
-function findTableBHeaderIndex(rows){
-  for(let i=0;i<rows.length;i++){
-    const row = rows[i]||[];
-    if(row.some(c=>norm(c).startsWith('ref souscri'))) return i;
-  }
-  return -1;
+/**
+ * 2. CLASSIFICATION DU STATUT "ANNULÉ"
+ */
+function isStatusCancelled(statusValue) {
+    if (statusValue === undefined || statusValue === null) return false;
+    const normalized = String(statusValue).trim().toLowerCase();
+    return normalized.includes("annule") || normalized.includes("resilie") || normalized.includes("rejete");
 }
 
-function autoDetectAndProcess(){
-  clearError();
-  if(!workbook) return;
-  try{
-    let foundA = null, foundB = null;
+/**
+ * 3. EXTRACTION ROBUSTE DES NUMÉROS DE CONTRAT (5 à 7 chiffres)
+ */
+function extractContractId(value) {
+    if (!value) return null;
+    const cleaned = String(value).trim();
+    const match = cleaned.match(/\b\d{5,7}\b/);
+    return match ? match[0] : null;
+}
 
-    // scan de toutes les feuilles pour repérer la table de suivi (A) et l'export CRM (B)
-    for(const sheetName of workbook.SheetNames){
-      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {header:1, raw:false, defval:null});
-      if(!rows.length) continue;
-
-      if(!foundA){
-        const idxA = findHeaderIndex(rows, ['Horodateur','Date de Vente','Nom du Commercial']);
-        if(idxA !== -1){
-          const headerA = rows[idxA];
-          const testC = colIndexByNames(headerA, ['Date de Vente']);
-          const testAgent = colIndexByNames(headerA, ['Nom du Commercial']);
-          if(testC!==-1 && testAgent!==-1) foundA = {sheetName, idxA, rows, headerA};
-        }
-      }
-      // la table B peut être détectée même dans la feuille qui contient déjà A (juste après),
-      // ou dans une feuille à part entière consacrée uniquement à l'export CRM
-      const idxB = findTableBHeaderIndex(rows);
-      if(idxB !== -1 && !foundB){
-        foundB = {sheetName, idxB, rows, headerB: rows[idxB]};
-      }
-    }
-
-    if(!foundA){
-      throw new Error('Impossible de localiser la table de suivi des ventes (colonnes "Date de Vente" / "Nom du Commercial") dans aucune des feuilles du classeur : ' + workbook.SheetNames.join(', ') + '.');
-    }
-
-    // si B a été trouvée DANS la même feuille que A et APRÈS la ligne d'en-tête de A → table empilée (ancien format)
-    let bodyA, bodyB = [], headerB = null, crmSheetInfo = 'aucun export CRM détecté';
-    if(foundB && foundB.sheetName===foundA.sheetName && foundB.idxB > foundA.idxA){
-      bodyA = foundA.rows.slice(foundA.idxA+1, foundB.idxB);
-      bodyB = foundB.rows.slice(foundB.idxB+1);
-      headerB = foundB.headerB;
-      crmSheetInfo = `export CRM rapproché (même feuille « ${foundA.sheetName} »)`;
-    } else {
-      bodyA = foundA.rows.slice(foundA.idxA+1);
-      if(foundB){
-        bodyB = foundB.rows.slice(foundB.idxB+1);
-        headerB = foundB.headerB;
-        crmSheetInfo = `export CRM rapproché (feuille séparée « ${foundB.sheetName} »)`;
-      }
-    }
-
-    const cA = {
-      dateVente: colIndexByNames(foundA.headerA, ['Date de Vente']),
-      typeContrat: colIndexByNames(foundA.headerA, ['Type de Contrat']),
-      produit: colIndexByNames(foundA.headerA, ['Produit Vendu']),
-      contratEnergie: colIndexByNames(foundA.headerA, ['Numéro Contrat Energie','Numero Contrat Energie']),
-      nomClient: colIndexByNames(foundA.headerA, ['Nom du Client']),
-      prenomClient: colIndexByNames(foundA.headerA, ['Prénom du Client','Prenom du Client']),
-      commercial: colIndexByNames(foundA.headerA, ['Nom du Commercial']),
-      contratConso: colIndexByNames(foundA.headerA, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote'])
+/**
+ * 4. MOTEUR TRANSACTIONNEL ET RAPPROCHEMENT DES DONNÉES
+ * Traite les lignes de toutes les feuilles et applique les règles de gestion.
+ */
+function processTransactionalUpdate(allRows, currentContractsState) {
+    // Étape d'intégrité : Copie profonde de l'état pour éviter les écritures partielles en cas de plantage
+    const stateClone = JSON.parse(JSON.stringify(currentContractsState));
+    
+    const report = {
+        success: false,
+        processedCount: 0,
+        alertsRaised: 0,
+        errors: [],
+        warnings: []
     };
-    if(cA.dateVente===-1 || cA.commercial===-1 || cA.contratEnergie===-1){
-      throw new Error('Colonnes essentielles introuvables dans la table de suivi (Date de Vente / Nom du Commercial / Numéro Contrat Energie), feuille « '+foundA.sheetName+' ».');
+
+    try {
+        // Étape A : Cartographie et indexation des lignes par numéro de contrat unique
+        allRows.forEach((row, index) => {
+            // Mapping ultra-flexible des en-têtes (tolérance aux libellés modifiés ou tronqués)
+            const rawContractField = row['Numéro Contrat Energie'] || row['Contrat ID'] || row['REF SOUSCRIPTION'] || row['REF SOUSCRIPTI'] || row['Numero Contrat'];
+            const contractId = extractContractId(rawContractField);
+            
+            if (!contractId) {
+                // Ligne ignorée car pas d'ID de contrat valide détecté
+                return;
+            }
+
+            const rawStatus = row['Statut Vente'] || row['Statut'] || row['status'] || row['Etat'];
+            const paymentValue = parseFloat(row['Montant Brut'] || row['Paiement Brut'] || row['Montant'] || row['Comissions'] || 0);
+            const agentName = row['Agent'] || row['Nom Agent'] || "Inconnu";
+
+            // Étape B : Initialisation du contrat dans le dictionnaire s'il n'existe pas encore
+            if (!stateClone[contractId]) {
+                stateClone[contractId] = {
+                    id: contractId,
+                    agent: agentName,
+                    paiementBrut: 0,
+                    statutInterne: "EN_ATTENTE",
+                    revueQualiteRequise: false,
+                    historiqueStatuts: []
+                };
+            }
+
+            const currentContract = stateClone[contractId];
+
+            // Étape C : Application de la règle de NON-RÉVERSIBILITÉ
+            const alreadyPaid = currentContract.statutInterne === "PAYE_CONFIRME" || currentContract.paiementBrut > 0;
+
+            if (isStatusPaid(rawStatus)) {
+                if (isNaN(paymentValue) || paymentValue <= 0) {
+                    report.warnings.push(`Ligne ${index + 2} : Contrat ${contractId} détecté "Payé" mais montant brut invalide ou nul.`);
+                } else {
+                    // Si déjà payé, on évite d'écraser inutilement sauf si le montant change
+                    currentContract.paiementBrut = paymentValue;
+                    currentContract.statutInterne = "PAYE_CONFIRME";
+                    currentContract.revueQualiteRequise = false; // Plus d'alerte si re-confirmé payé
+                    report.processedCount++;
+                }
+            } else if (isStatusCancelled(rawStatus)) {
+                if (alreadyPaid) {
+                    // RÈGLE MÉTIER CRITIQUE : Un contrat déjà payé qui passe en "Annulé" lève une alerte Revue Qualité au lieu d'être effacé
+                    currentContract.revueQualiteRequise = true;
+                    currentContract.statutInterne = "ALERTE_ANNULATION_POST_PAIEMENT";
+                    if (!currentContract.historiqueStatuts.includes("ALERTE_ANNULATION")) {
+                        currentContract.historiqueStatuts.push("ALERTE_ANNULATION");
+                    }
+                    report.alertsRaised++;
+                } else {
+                    // Si non payé préalablement, l'annulation automatique suit son cours standard
+                    currentContract.paiementBrut = 0;
+                    currentContract.statutInterne = "ANNULE_CRM";
+                }
+            } else {
+                // Autres statuts (en cours, etc.) : On ne touche pas au montant payé s'il existe déjà
+                if (!alreadyPaid) {
+                    currentContract.statutInterne = "EN_COURS_CRM";
+                }
+            }
+        });
+
+        report.success = true;
+        return { updatedState: stateClone, report: report };
+
+    } catch (globalError) {
+        report.success = false;
+        report.errors.push({ global: true, error: globalError.message });
+        return { updatedState: currentContractsState, report: report };
     }
-
-    let refMap = {};
-    if(headerB){
-      const cB = {
-        ref: colIndexByNames(headerB, ['REF SOUSCRIPTION','REF SOUSCRIPTI']),
-        etat: colIndexByNames(headerB, ['ETAT']),
-        dateAct: colIndexByNames(headerB, ['DATE ACTIVATION','DATE ACTIVATIO']),
-        dateResil: colIndexByNames(headerB, ['DATE RESILIATION','DATE RESILIATIO']),
-        offre: colIndexByNames(headerB, ['OFFRE'])
-      };
-      bodyB.forEach(r=>{
-        if(!r) return;
-        const ref = r[cB.ref];
-        if(ref===null || ref===undefined || String(ref).trim()==='') return;
-        // normalise "1804016.0" (nombre flottant Excel) → "1804016"
-        const refKey = String(ref).trim().replace(/\.0$/,'');
-        refMap[refKey] = {
-          etat: cB.etat!==-1 ? r[cB.etat] : null,
-          dateAct: cB.dateAct!==-1 ? r[cB.dateAct] : null,
-          dateResil: cB.dateResil!==-1 ? r[cB.dateResil] : null
-        };
-      });
-      if(cB.ref===-1 || cB.etat===-1){
-        showError(`Feuille CRM « ${foundB.sheetName} » détectée mais colonnes REF/ETAT non reconnues — statuts non rapprochés. Vérifiez les en-têtes de cette feuille.`);
-      }
-    } else {
-      showError('Aucun export CRM trouvé dans le classeur : les contrats MINT resteront au statut "Introuvable (CRM)" et aucune activation/décommission automatique ne pourra être calculée tant que la feuille de statuts n\'est pas fournie.');
-    }
-
-    buildLignes(bodyA, cA, refMap, !!headerB);
-    renderAll();
-    setStatus(`Analyse OK — table ventes: feuille « ${foundA.sheetName} » (${bodyA.filter(r=>r&&r[cA.dateVente]).length} ventes) · ${crmSheetInfo} · ${rawLignes.length} lignes contrat.`, headerB ? 'ok' : 'warn');
-  }catch(err){
-    // on efface les données précédentes pour ne jamais laisser un dashboard obsolète affiché avec un message d'erreur
-    rawLignes = [];
-    renderAll();
-    showError(err.message);
-    setStatus('Échec de l\'analyse — aucune donnée affichée', 'error');
-  }
 }
 
-function renderRawSheetPreview(sheetName){
-  // aperçu brut de la feuille sélectionnée (aide au diagnostic), sans relancer le moteur de calcul
-  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {header:1, raw:false, defval:null});
-  setStatus(`Feuille « ${sheetName} » : ${rows.length} lignes brutes (aperçu seulement — les données affichées restent celles détectées automatiquement au chargement).`, 'ok');
-}
+/**
+ * 5. VALIDATION POST-TRAITEMENT ET COMPARAISON DE COHÉRENCE
+ */
+function validatePostProcessing(allRows, updatedState) {
+    const auditReport = {
+        expectedPayments: 0,
+        confirmedPayments: 0,
+        discrepancies: []
+    };
 
-/* ============================= EXTRACTION CONTRATS ============================= */
-function extractContractNumbers(val){
-  if(val===null || val===undefined) return [];
-  const s = String(val).trim();
-  if(s==='' || s==='0' || s==='*' || s==='\\*') return [];
-  const found = s.match(/\d{5,}/g);
-  return found ? found : [];
-}
-function isEmptyConso(val){
-  if(val===null||val===undefined) return true;
-  const s = String(val).trim();
-  return s==='' || s==='0' || s==='*' || s==='\\*';
-}
-function parseDate(v){
-  if(v===null||v===undefined||v==='') return null;
-  if(v instanceof Date && !isNaN(v)) return v;
-  const s = String(v).trim();
-  // formats: DD/MM/YYYY, YYYY-MM-DD, "DD/MM/YYYY à HH:MM"
-  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if(m) return new Date(+m[3], +m[2]-1, +m[1]);
-  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
-  const d = new Date(s);
-  return isNaN(d) ? null : d;
-}
-function monthsBetween(d1, d2){
-  if(!d1||!d2) return null;
-  return (d2.getFullYear()-d1.getFullYear())*12 + (d2.getMonth()-d1.getMonth()) - (d2.getDate()<d1.getDate()?1:0);
-}
-function fmtDate(d){ return d ? d.toLocaleDateString('fr-FR') : ''; }
-function nextFriday(d){
-  if(!d) return null;
-  const day = d.getDay(); // 0=Dim ... 5=Ven ... 6=Sam
-  const diff = (5 - day + 7) % 7;
-  const res = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
-  return res;
-}
-// une avance = le brut a été réglé avant son vendredi de paie officiel
-function isAvance(l){
-  if(l.type!=='MINT' || l.statutPaiementBrut!=='Payé' || !l.datePaiementBrut || !l.vendrediPaiement) return false;
-  const paye = parseDate(l.datePaiementBrut);
-  if(!paye) return false;
-  return paye.getTime() < l.vendrediPaiement.getTime();
-}
-// applique une édition (statut paiement / décommission) à la fois sur overrides et sur la ligne affichée
-function setOverride(id, key, value){
-  overrides[id] = overrides[id] || {};
-  overrides[id][key] = value;
-  const line = rawLignes.find(l=>l.id===id);
-  if(line) line[key] = value;
-  return line;
-}
+    allRows.forEach((row, index) => {
+        const rawContractField = row['Numéro Contrat Energie'] || row['Contrat ID'] || row['REF SOUSCRIPTION'] || row['REF SOUSCRIPTI'];
+        const contractId = extractContractId(rawContractField);
+        const rawStatus = row['Statut Vente'] || row['Statut'] || row['status'];
 
-/* ============================= MOTEUR DE CALCUL ============================= */
-function buildLignes(bodyA, cA, refMap, hasCRM){
-  rawLignes = [];
-  const today = new Date();
-  const refSeen = {}; // désambiguïsation uniquement en cas de vrai doublon du même numéro de contrat
+        if (contractId && isStatusPaid(rawStatus)) {
+            auditReport.expectedPayments++;
+            const stateRecord = updatedState[contractId];
 
-  function stableId(prefix, ref){
-    refSeen[prefix+ref] = (refSeen[prefix+ref]||0) + 1;
-    const n = refSeen[prefix+ref];
-    return n===1 ? (prefix+'-'+ref) : (prefix+'-'+ref+'-dup'+n); // stable d'un import à l'autre
-  }
-
-  bodyA.forEach(row=>{
-    if(!row) return;
-    const dateVenteRaw = row[cA.dateVente];
-    if(dateVenteRaw===null || dateVenteRaw===undefined || String(dateVenteRaw).trim()==='') return;
-    const dateVente = parseDate(dateVenteRaw);
-    const agent = (row[cA.commercial]||'').toString().trim() || '(agent non renseigné)';
-    const client = [row[cA.nomClient], row[cA.prenomClient]].filter(Boolean).join(' ').trim();
-    const produit = cA.produit!==-1 ? row[cA.produit] : '';
-
-    // --- MINT ---
-    const contracts = extractContractNumbers(row[cA.contratEnergie]);
-    contracts.forEach(ref=>{
-      const info = refMap[ref];
-      const etatRaw = info ? info.etat : null;
-      const etatN = norm(etatRaw);
-      const found = !!info;
-      const isActivated = etatN.startsWith('activ');
-      const isChute = STATUTS_CHUTE.some(s => etatN.startsWith(s));
-      const isPending = !found || etatN.startsWith('introuvable') || etatN.startsWith('en attente');
-
-      const moisEcoules = monthsBetween(dateVente, today);
-      const withinClawbackWindow = moisEcoules !== null && moisEcoules <= 3;
-
-      const brut = 50;
-      const activation = isActivated ? 150 : 0;
-
-      const lineId = stableId('MINT', ref);
-      const manualOverride = overrides[lineId] || {};
-      const decommissionManuel = !!manualOverride.decommissionManuel;
-      const wasBrutPaid = manualOverride.statutPaiementBrut === 'Payé';
-      const wasActivPaid = manualOverride.statutPaiementActivation === 'Payé';
-
-      // RÈGLE MÉTIER : un brut (ou une activation) déjà payé ne peut plus être repris
-      // automatiquement par le système. Si le CRM tombe en annulation après paiement,
-      // ce n'est PLUS un clawback automatique — ça devient une alerte qui nécessite une
-      // décision manuelle de Qualité (decommissionManuel), la seule habilitée à annuler
-      // un montant déjà versé.
-      const autoClawback = isChute && withinClawbackWindow && !wasBrutPaid && !wasActivPaid;
-      const needsQualityReview = isChute && (wasBrutPaid || wasActivPaid) && !decommissionManuel;
-      const decommissionne = autoClawback || decommissionManuel;
-
-      const net = decommissionne ? 0 : (brut + activation);
-      const vendrediPaiement = nextFriday(dateVente);
-
-      rawLignes.push({
-        id: lineId, type:'MINT', agent, dateVente, dateVenteStr: fmtDate(dateVente),
-        vendrediPaiement, vendrediPaiementStr: fmtDate(vendrediPaiement),
-        contrat: ref, client, produit,
-        statutCRM: found ? (etatRaw||'—') : 'Introuvable (CRM)',
-        brut, activation, net,
-        decommissionAuto: autoClawback, decommissionManuel,
-        decommissionne, needsQualityReview,
-        statutPaiementBrut: manualOverride.statutPaiementBrut || 'Non Payé',
-        statutPaiementActivation: manualOverride.statutPaiementActivation || 'Non Payé',
-        datePaiementBrut: manualOverride.datePaiementBrut || null,
-        motifQualite: manualOverride.motifQualite || '',
-        pending: isPending,
-        moisEcoules
-      });
+            if (stateRecord && stateRecord.paiementBrut > 0) {
+                auditReport.confirmedPayments++;
+            } else {
+                auditReport.discrepancies.push({
+                    line: index + 2,
+                    contractId: contractId,
+                    reason: `Détecté "Payé" dans l'import, mais le montant brut du contrat n'est pas actif dans le système.`
+                });
+            }
+        }
     });
 
-    // --- CONSOPILOTE ---
-    if(cA.contratConso!==-1 && !isEmptyConso(row[cA.contratConso])){
-      const ref = String(row[cA.contratConso]).trim();
-      const moisEcoules = monthsBetween(dateVente, today);
-      const signature = 100;
-      const m1 = (moisEcoules!==null && moisEcoules>=1) ? 50 : 0;
-      const m2 = (moisEcoules!==null && moisEcoules>=2) ? 50 : 0;
-      const net = signature + m1 + m2;
+    return auditReport;
+}
 
-      const lineId = stableId('CONSO', ref);
-      const manualOverride = overrides[lineId] || {};
+/**
+ * 6. INITIALISATION DU GESTIONNAIRE D'IMPORT (MULTI-FEUILLES EXCEL)
+ */
+document.addEventListener("DOMContentLoaded", () => {
+    const fileInput = document.getElementById('file-input') || document.querySelector('input[type="file"]');
+    const errorDisplay = document.querySelector('.error-message') || document.getElementById('error-display') || document.querySelector('.bg-red-900\\/50') || document.querySelector('[class*="red"]');
 
-      rawLignes.push({
-        id: lineId, type:'CONSO', agent, dateVente, dateVenteStr: fmtDate(dateVente),
-        contrat: ref, client, produit: 'ConsoPilote',
-        signature, m1, m2, net,
-        m1Echu: moisEcoules!==null && moisEcoules>=1,
-        m2Echu: moisEcoules!==null && moisEcoules>=2,
-        statutPaiement: manualOverride.statutPaiement || 'Non Payé',
-        moisEcoules
-      });
+    if (!fileInput) {
+        console.error("SIPP Engine : Aucun sélecteur de fichier d'import trouvé dans le DOM.");
+        return;
     }
-  });
-}
 
-/* ============================= RENDU TABLES ============================= */
-function renderAll(){
-  renderSuivi();
-  renderFinance();
-  renderKPI();
-  renderAlertes();
-  populateAgentFilter();
-  renderCalendar();
-  renderQualite();
-  renderMesVentes();
-}
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
 
-function renderSuivi(){
-  const data = rawLignes.map(l=>({
-    Type: l.type, Agent: l.agent, Date_Vente: l.dateVenteStr, Contrat: l.contrat,
-    Client: l.client, Produit: l.produit,
-    Statut_CRM: l.type==='MINT' ? l.statutCRM : '—'
-  }));
-  if(tSuivi) tSuivi.destroy();
-  tSuivi = new Tabulator("#table-suivi", {
-    data, layout:"fitDataStretch", height:"420px", placeholder:"Aucune donnée — importez un fichier.",
-    columns:[
-      {title:"Type", field:"Type", width:90, formatter: c=>{
-        const v=c.getValue(); return `<span class="tag ${v==='MINT'?'ok':'warn'}">${v}</span>`;
-      }},
-      {title:"Agent", field:"Agent", widthGrow:2},
-      {title:"Date de vente", field:"Date_Vente", width:120},
-      {title:"N° Contrat", field:"Contrat", width:130},
-      {title:"Client", field:"Client", widthGrow:2},
-      {title:"Produit", field:"Produit", widthGrow:1},
-      {title:"Statut CRM", field:"Statut_CRM", widthGrow:1}
-    ]
-  });
-}
+        const reader = new FileReader();
 
-function renderFinance(){
-  const data = rawLignes.map(l=>{
-    if(l.type==='MINT'){
-      const wasBrutPaid = l.statutPaiementBrut==='Payé';
-      return {
-        id:l.id, Type:'MINT', Agent:l.agent, Date:l.dateVenteStr, Vendredi:l.vendrediPaiementStr,
-        Contrat:l.contrat,
-        Brut:l.brut,
-        Statut_Brut: l.decommissionne ? (wasBrutPaid ? 'Payé — annulé qualité' : '—') : l.statutPaiementBrut,
-        Date_Paiement: l.datePaiementBrut || '',
-        Avance: isAvance(l),
-        Activation:l.activation,
-        Statut_Activation: l.activation===0 ? '—' : (l.decommissionne ? (l.statutPaiementActivation==='Payé' ? 'Payé — annulé qualité' : '—') : l.statutPaiementActivation),
-        Decom_manuel:l.decommissionManuel,
-        Revue_Qualite: l.needsQualityReview,
-        Net:l.net
-      };
-    }
-    return {
-      id:l.id, Type:'CONSO', Agent:l.agent, Date:l.dateVenteStr, Vendredi:'—',
-      Contrat:l.contrat,
-      Brut:l.signature, Statut_Brut:l.statutPaiement, Date_Paiement:'', Avance:false,
-      Activation:l.m1+l.m2, Statut_Activation:'—',
-      Decom_manuel:false, Revue_Qualite:false, Net:l.net
-    };
-  });
+        reader.onload = function(evt) {
+            try {
+                if (typeof XLSX === 'undefined') {
+                    throw new Error("Bibliothèque d'analyse Excel absente. Assurez-vous d'avoir importé le script CDN SheetJS.");
+                }
 
-  if(tFinance) tFinance.destroy();
-  tFinance = new Tabulator("#table-finance", {
-    data, layout:"fitDataStretch", height:"460px", placeholder:"Aucune donnée.",
-    columns:[
-      {title:"Type", field:"Type", width:70, formatter:c=>`<span class="tag ${c.getValue()==='MINT'?'ok':'warn'}">${c.getValue()}</span>`},
-      {title:"Agent", field:"Agent", widthGrow:2},
-      {title:"Date vente", field:"Date", width:95},
-      {title:"Vendredi de paie", field:"Vendredi", width:110},
-      {title:"Contrat", field:"Contrat", width:100},
-      {title:"Brut (DH)", field:"Brut", width:80, hozAlign:"right"},
-      {title:"Statut Brut", field:"Statut_Brut", width:150,
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—' && !cell.getValue().startsWith('Payé — annulé'),
-        editorParams:{values:["Non Payé","Payé"]},
-        formatter:c=>{
-          const v=c.getValue();
-          if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
-          if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
-          return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
-        },
-        cellEdited:cell=>{
-          const r = cell.getRow().getData();
-          if(cell.getValue()==='—') return;
-          const key = r.Type==='MINT' ? 'statutPaiementBrut' : 'statutPaiement';
-          setOverride(r.id, key, cell.getValue());
-          if(r.Type==='MINT'){
-            // à chaque passage "Payé" on horodate au jour du jour ; repasser "Non Payé" efface la date
-            if(cell.getValue()==='Payé') setOverride(r.id, 'datePaiementBrut', fmtDate(new Date()));
-            else setOverride(r.id, 'datePaiementBrut', null);
-          }
-          renderFinanceSummary(); renderKPI(); renderPayroll(); renderCalendar();
-        }
-      },
-      {title:"Payé le", field:"Date_Paiement", width:150,
-        editor:"input", editable:cell=>canEditFinance() && cell.getData().Statut_Brut==='Payé',
-        formatter:c=>{
-          const r=c.getRow().getData();
-          if(!c.getValue()) return '<span style="color:var(--ink-dim)">—</span>';
-          return r.Avance ? `${c.getValue()} <span class="tag warn">Avance</span>` : c.getValue();
-        },
-        cellEdited:cell=>{
-          const r = cell.getRow().getData();
-          const d = parseDate(cell.getValue());
-          if(!d){ showError('Date invalide — utilisez le format JJ/MM/AAAA.'); return; }
-          setOverride(r.id, 'datePaiementBrut', fmtDate(d));
-          renderFinance();
-        }
-      },
-      {title:"Activation (DH)", field:"Activation", width:100, hozAlign:"right"},
-      {title:"Statut Activation", field:"Statut_Activation", width:150,
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—' && !cell.getValue().startsWith('Payé — annulé'),
-        editorParams:{values:["Non Payé","Payé"]},
-        formatter:c=>{
-          const v=c.getValue();
-          if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
-          if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
-          return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
-        },
-        cellEdited:cell=>{
-          const r = cell.getRow().getData();
-          if(cell.getValue()==='—') return;
-          setOverride(r.id, 'statutPaiementActivation', cell.getValue());
-          renderFinanceSummary(); renderKPI();
-        }
-      },
-      {title:"Décommissionné", field:"Decom_manuel", width:120, formatter:"tickCross", editor:"tickCross", editable:()=>canEditFinance(),
-        cellEdited:cell=>{
-          const r = cell.getRow().getData();
-          setOverride(r.id, 'decommissionManuel', cell.getValue());
-          recomputeAndRerender();
-        }
-      },
-      {title:"⚠ Revue Qualité", field:"Revue_Qualite", width:130, formatter:c=>c.getValue() ? '<span class="tag warn">À statuer</span>' : ''},
-      {title:"Net (DH)", field:"Net", width:90, hozAlign:"right",
-        formatter:c=>`<b style="color:${c.getValue()>0?'#3fd6a4':'#8ea0bd'}">${c.getValue()} DH</b>`}
-    ]
-  });
+                const data = evt.target.result;
+                // Lecture globale de tous les formats Excel (xls, xlsx, xlsm, xlsb)
+                const workbook = XLSX.read(data, { type: 'binary' });
+                
+                let combinedRows = [];
 
-  document.getElementById('filterAgent').onchange =
-  document.getElementById('filterType').onchange =
-  document.getElementById('filterVendredi').onchange =
-  document.getElementById('filterStatutPaie').onchange = applyFinanceFilters;
+                // Étape 1 : Lecture exhaustive de CHAQUE feuille de calcul
+                workbook.SheetNames.forEach(sheetName => {
+                    const worksheet = workbook.Sheets[sheetName];
+                    const sheetData = XLSX.utils.sheet_to_json(worksheet, { defval: null });
+                    
+                    // Fusion des données de toutes les feuilles en un seul tableau
+                    combinedRows = combinedRows.concat(sheetData);
+                });
 
-  populateVendrediFilter();
-  renderFinanceSummary();
-  renderPayroll();
-}
+                console.log(`[SIPP Audit] ${combinedRows.length} lignes extraites à partir de ${workbook.SheetNames.length} feuilles.`);
 
-function populateVendrediFilter(){
-  const vendredis = [...new Set(rawLignes.filter(l=>l.type==='MINT').map(l=>l.vendrediPaiementStr))]
-    .sort((a,b)=> a.split('/').reverse().join('').localeCompare(b.split('/').reverse().join('')));
-  const sel = document.getElementById('filterVendredi');
-  const current = sel.value;
-  sel.innerHTML = '<option value="">Tous les vendredis</option>' + vendredis.map(v=>`<option value="${v}">${v}</option>`).join('');
-  sel.value = current;
-}
+                // Étape 2 : Lancement de la mise à jour transactionnelle sécurisée
+                const result = processTransactionalUpdate(combinedRows, window.appContractsState);
 
-function applyFinanceFilters(){
-  const agent = document.getElementById('filterAgent').value;
-  const type = document.getElementById('filterType').value;
-  const vendredi = document.getElementById('filterVendredi').value;
-  const statut = document.getElementById('filterStatutPaie').value;
-  tFinance.clearFilter();
-  if(agent) tFinance.addFilter("Agent","=",agent);
-  if(type) tFinance.addFilter("Type","=",type);
-  if(vendredi) tFinance.addFilter("Vendredi","=",vendredi);
-  if(statut) tFinance.addFilter("Statut_Brut","=",statut);
-}
+                if (result.report.success && result.report.errors.length === 0) {
+                    // Étape 3 : Validation post-traitement
+                    const audit = validatePostProcessing(combinedRows, result.updatedState);
 
-function recomputeAndRerender(){
-  // rejoue le moteur avec les overrides à jour (sans re-parser le fichier)
-  rawLignes.forEach(l=>{
-    if(l.type!=='MINT') return;
-    const o = overrides[l.id]||{};
-    l.decommissionManuel = !!o.decommissionManuel;
-    l.decommissionne = l.decommissionAuto || l.decommissionManuel;
-    l.net = l.decommissionne ? 0 : (l.brut + l.activation);
-  });
-  renderFinance();
-  renderKPI();
-  renderAlertes();
-  renderQualite();
-  renderMesVentes();
-}
+                    if (audit.discrepancies.length === 0) {
+                        // VALIDATION validée : On applique définitivement les modifications
+                        window.appContractsState = result.updatedState;
 
-function renderPayroll(){
-  const byVendredi = {};
-  rawLignes.filter(l=>l.type==='MINT' && !l.decommissionne).forEach(l=>{
-    const key = l.vendrediPaiementStr || '—';
-    if(!byVendredi[key]) byVendredi[key] = {Vendredi:key, Contrats:0, Brut_a_payer:0, Brut_paye:0};
-    byVendredi[key].Contrats++;
-    if(l.statutPaiementBrut==='Payé') byVendredi[key].Brut_paye += l.brut;
-    else byVendredi[key].Brut_a_payer += l.brut;
-  });
-  const data = Object.values(byVendredi).sort((a,b)=>{
-    const [da,ma,ya]=a.Vendredi.split('/'); const [db,mb,yb]=b.Vendredi.split('/');
-    return new Date(ya,ma-1,da) - new Date(yb,mb-1,db);
-  });
-  const today = fmtDate(nextFriday(new Date()));
+                        // Nettoyage de l'affichage d'erreur s'il existait
+                        if (errorDisplay) {
+                            errorDisplay.style.display = 'none';
+                            errorDisplay.innerHTML = '';
+                        }
 
-  const tbl = document.getElementById('table-payroll');
-  if(window.tPayroll) window.tPayroll.destroy();
-  window.tPayroll = new Tabulator(tbl, {
-    data, layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,320)+"px":"80px",
-    placeholder:"Aucune échéance — importez un fichier.",
-    columns:[
-      {title:"Vendredi de paie", field:"Vendredi", widthGrow:1, formatter:c=>{
-        const v=c.getValue();
-        return v===today ? `<b style="color:var(--amber)">${v} — prochain</b>` : v;
-      }},
-      {title:"Contrats MINT", field:"Contrats", hozAlign:"center", width:120},
-      {title:"Brut à payer (DH)", field:"Brut_a_payer", hozAlign:"right", width:150,
-        formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
-      {title:"Brut déjà payé (DH)", field:"Brut_paye", hozAlign:"right", width:150}
-    ]
-  });
-}
+                        // Notification de réussite complète
+                        alert(`✅ Importation Excel terminée avec succès !\n\n` +
+                              `• Feuilles analysées : ${workbook.SheetNames.length}\n` +
+                              `• Total lignes traitées : ${combinedRows.length}\n` +
+                              `• Contrats enregistrés/mis à jour : ${result.report.processedCount}\n` +
+                              `• Alertes Qualité levées (non-réversibilité) : ${result.report.alertsRaised}`);
+                        
+                        console.log("Nouvel état applicatif (window.appContractsState) :", window.appContractsState);
+                    } else {
+                        console.warn("Divergences détectées lors de l'audit post-traitement :", audit.discrepancies);
+                        alert(`⚠ Importation partielle avec avertissements.\n` +
+                              `Certains statuts payés n'ont pas pu être affectés. Consultez la console de développement pour voir le rapport d'anomalies.`);
+                    }
+                } else {
+                    // ROLLBACK : Aucune modification n'a été appliquée au state original
+                    throw new Error(result.report.errors[0]?.error || "Erreur interne pendant le calcul.");
+                }
 
-function renderFinanceSummary(){
-  const box = document.getElementById('finance-summary');
-  let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0, avances=0;
-  const prochainVendredi = fmtDate(nextFriday(new Date()));
-  let brutVendrediProchain = 0;
+            } catch (error) {
+                console.error("[SIPP Error]", error);
+                if (errorDisplay) {
+                    errorDisplay.style.display = 'block';
+                    errorDisplay.innerHTML = `⚠ Impossible de lire le fichier : ${error.message}`;
+                }
+                alert(`❌ Échec de l'importation :\n${error.message}`);
+            }
+        };
 
-  rawLignes.forEach(l=>{
-    if(l.type==='MINT'){
-      if(l.decommissionne){ decom += (l.brut+l.activation); return; }
-      if(l.statutPaiementBrut==='Payé'){
-        brutPaye += l.brut;
-        if(isAvance(l)) avances += l.brut;
-      } else {
-        brutDu += l.brut;
-        if(l.vendrediPaiementStr===prochainVendredi) brutVendrediProchain += l.brut;
-      }
-      if(l.activation>0){
-        if(l.statutPaiementActivation==='Payé') activPaye += l.activation; else activDu += l.activation;
-      }
-    } else {
-      if(l.statutPaiement==='Payé') consoPaye += l.net; else consoDu += l.net;
-    }
-  });
-
-  box.innerHTML = `
-    <div class="stat-card red"><div class="label">Brut MINT — vendredi ${prochainVendredi}</div><div class="value">${brutVendrediProchain} DH</div></div>
-    <div class="stat-card mint"><div class="label">Brut MINT à payer (total)</div><div class="value">${brutDu} DH</div></div>
-    <div class="stat-card blue"><div class="label">Brut MINT payé</div><div class="value">${brutPaye} DH</div></div>
-    <div class="stat-card amber"><div class="label">dont Avances (payé avant échéance)</div><div class="value">${avances} DH</div></div>
-    <div class="stat-card amber"><div class="label">Activation MINT à payer</div><div class="value">${activDu} DH</div></div>
-    <div class="stat-card blue"><div class="label">Activation MINT payée</div><div class="value">${activPaye} DH</div></div>
-    <div class="stat-card amber"><div class="label">CONSO à payer</div><div class="value">${consoDu} DH</div></div>
-    <div class="stat-card blue"><div class="label">CONSO payé</div><div class="value">${consoPaye} DH</div></div>
-    <div class="stat-card red"><div class="label">Décommissionné (clawback)</div><div class="value">${decom} DH</div></div>
-  `;
-}
-
-function renderKPI(){
-  const byAgent = {};
-  rawLignes.forEach(l=>{
-    const key = l.agent;
-    if(!byAgent[key]) byAgent[key] = {Agent:key, Ventes_MINT:0, Ventes_CONSO:0, Activees:0, Decommissionnees:0, Net_Total:0};
-    if(l.type==='MINT'){
-      byAgent[key].Ventes_MINT++;
-      if(l.activation>0) byAgent[key].Activees++;
-      if(l.decommissionne) byAgent[key].Decommissionnees++;
-      byAgent[key].Net_Total += l.net;
-    } else {
-      byAgent[key].Ventes_CONSO++;
-      byAgent[key].Net_Total += l.net;
-    }
-  });
-  const data = Object.values(byAgent).map(a=>({
-    ...a,
-    Taux_Activation: a.Ventes_MINT ? Math.round(100*a.Activees/a.Ventes_MINT)+'%' : '—',
-    Taux_Decommission: a.Ventes_MINT ? Math.round(100*a.Decommissionnees/a.Ventes_MINT)+'%' : '—'
-  })).sort((a,b)=>b.Net_Total-a.Net_Total);
-
-  if(tKPI) tKPI.destroy();
-  tKPI = new Tabulator("#table-kpi", {
-    data, layout:"fitDataStretch", height:"420px", placeholder:"Aucune donnée.",
-    columns:[
-      {title:"Agent", field:"Agent", widthGrow:2},
-      {title:"Ventes MINT", field:"Ventes_MINT", hozAlign:"center"},
-      {title:"Ventes ConsoPilote", field:"Ventes_CONSO", hozAlign:"center"},
-      {title:"Taux Activation MINT", field:"Taux_Activation", hozAlign:"center"},
-      {title:"Taux Décommission", field:"Taux_Decommission", hozAlign:"center"},
-      {title:"Net généré (DH)", field:"Net_Total", hozAlign:"right", formatter:c=>`<b>${c.getValue()} DH</b>`}
-    ]
-  });
-}
-
-function renderAlertes(){
-  const data = rawLignes.filter(l=>l.type==='MINT' && (l.needsQualityReview || l.pending || (l.moisEcoules!==null && l.moisEcoules>=2 && l.moisEcoules<=3 && !l.decommissionne))).map(l=>({
-    Agent:l.agent, Contrat:l.contrat, Date:l.dateVenteStr, Statut_CRM:l.statutCRM,
-    Alerte: l.needsQualityReview ? 'Annulation CRM après paiement — décision Qualité requise'
-          : l.pending ? 'Non rapproché avec le CRM'
-          : `Échéance clawback dans ${3-l.moisEcoules} mois`,
-    _priorite: l.needsQualityReview ? 0 : (l.pending ? 1 : 2)
-  })).sort((a,b)=>a._priorite-b._priorite);
-  if(tAlertes) tAlertes.destroy();
-  tAlertes = new Tabulator("#table-alertes", {
-    data, layout:"fitDataStretch", height:"320px", placeholder:"Aucune alerte active.",
-    columns:[
-      {title:"Agent", field:"Agent", widthGrow:2},
-      {title:"Contrat", field:"Contrat", width:120},
-      {title:"Date vente", field:"Date", width:110},
-      {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
-      {title:"Alerte", field:"Alerte", widthGrow:2, formatter:c=>{
-        const cls = c.getValue().includes('Qualité requise') ? 'bad' : 'warn';
-        return `<span class="tag ${cls}">${c.getValue()}</span>`;
-      }}
-    ]
-  });
-}
-
-function populateAgentFilter(){
-  const agents = [...new Set(rawLignes.map(l=>l.agent))].sort();
-  const sel = document.getElementById('filterAgent');
-  sel.innerHTML = '<option value="">Tous les agents</option>' + agents.map(a=>`<option value="${a}">${a}</option>`).join('');
-}
-
-/* ============================= SUIVI QUALITÉ (aucune donnée financière) ============================= */
-function renderQualite(){
-  if(!rawLignes.length) return;
-  const agents = [...new Set(rawLignes.filter(l=>l.type==='MINT').map(l=>l.agent))].sort();
-  const selAgent = document.getElementById('qualiteFilterAgent');
-  const curAgent = selAgent.value;
-  selAgent.innerHTML = '<option value="">Tous les agents</option>' + agents.map(a=>`<option value="${a}">${a}</option>`).join('');
-  selAgent.value = curAgent;
-
-  const data = rawLignes.filter(l=>l.type==='MINT').map(l=>{
-    const o = overrides[l.id]||{};
-    return {
-      id:l.id, Agent:l.agent, Date:l.dateVenteStr, Contrat:l.contrat,
-      Client:l.client, Statut_CRM:l.statutCRM,
-      Decommission_Auto: l.decommissionAuto,
-      Revue_Necessaire: l.needsQualityReview,
-      Annulation_Qualite: !!o.decommissionManuel,
-      Motif: o.motifQualite || ''
-    };
-  }).sort((a,b)=>(b.Revue_Necessaire?1:0)-(a.Revue_Necessaire?1:0));
-
-  if(tQualite) tQualite.destroy();
-  tQualite = new Tabulator("#table-qualite", {
-    data, layout:"fitDataStretch", height:"460px", placeholder:"Aucune donnée — importez un fichier.",
-    rowFormatter:row=>{
-      if(row.getData().Revue_Necessaire) row.getElement().style.boxShadow = 'inset 3px 0 0 var(--red)';
-    },
-    columns:[
-      {title:"Agent", field:"Agent", widthGrow:2},
-      {title:"Date vente", field:"Date", width:100},
-      {title:"Contrat", field:"Contrat", width:110},
-      {title:"Client", field:"Client", widthGrow:2},
-      {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
-      {title:"Décomm. auto (clawback <3 mois)", field:"Decommission_Auto", width:150, formatter:"tickCross"},
-      {title:"⚠ Revue requise", field:"Revue_Necessaire", width:130,
-        formatter:c=>c.getValue() ? '<span class="tag bad">Annulé CRM après paiement</span>' : ''},
-      {title:"Annulation Qualité", field:"Annulation_Qualite", width:140, formatter:"tickCross",
-        editor:"tickCross", editable:()=>canEditQuality(),
-        cellEdited:cell=>{
-          const r = cell.getRow().getData();
-          setOverride(r.id, 'decommissionManuel', cell.getValue());
-          recomputeAndRerender();
-          renderQualite();
-        }
-      },
-      {title:"Motif qualité", field:"Motif", widthGrow:2,
-        editor:"input", editable:()=>canEditQuality(),
-        cellEdited:cell=>{
-          const r = cell.getRow().getData();
-          overrides[r.id] = overrides[r.id]||{};
-          overrides[r.id].motifQualite = cell.getValue();
-        }
-      }
-    ]
-  });
-
-  document.getElementById('qualiteFilterAgent').onchange = document.getElementById('qualiteFilterStatut').onchange = ()=>{
-    const a = document.getElementById('qualiteFilterAgent').value;
-    const s = document.getElementById('qualiteFilterStatut').value;
-    tQualite.clearFilter();
-    if(a) tQualite.addFilter("Agent","=",a);
-    if(s==='actif') tQualite.addFilter("Annulation_Qualite","=",false);
-    if(s==='annule_qualite') tQualite.addFilter("Annulation_Qualite","=",true);
-    if(s==='revue') tQualite.addFilter("Revue_Necessaire","=",true);
-  };
-}
-
-/* ============================= MES VENTES (accès agent, lecture seule, personnalisé) ============================= */
-function renderMesVentes(){
-  if(!rawLignes.length || currentRole!=='agent' || !currentAgentName) return;
-  const mine = rawLignes.filter(l => norm(l.agent) === norm(currentAgentName));
-  document.getElementById('mesVentesAgentLabel').textContent = '— ' + currentAgentName + (mine.length ? '' : ' (aucune vente trouvée : vérifiez l\'orthographe exacte de votre nom auprès de votre manager)');
-
-  let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0;
-  mine.forEach(l=>{
-    if(l.type==='MINT'){
-      if(l.decommissionne){ decom += (l.brut+l.activation); return; }
-      if(l.statutPaiementBrut==='Payé') brutPaye+=l.brut; else brutDu+=l.brut;
-      if(l.activation>0){ if(l.statutPaiementActivation==='Payé') activPaye+=l.activation; else activDu+=l.activation; }
-    } else {
-      if(l.statutPaiement==='Payé') consoPaye+=l.net; else consoDu+=l.net;
-    }
-  });
-  document.getElementById('mesventes-summary').innerHTML = `
-    <div class="stat-card mint"><div class="label">Déjà payé (Brut+Activation+Conso)</div><div class="value">${brutPaye+activPaye+consoPaye} DH</div></div>
-    <div class="stat-card amber"><div class="label">En attente de paiement</div><div class="value">${brutDu+activDu+consoDu} DH</div></div>
-    <div class="stat-card red"><div class="label">Décommissionné</div><div class="value">${decom} DH</div></div>
-    <div class="stat-card blue"><div class="label">Nombre de ventes</div><div class="value">${mine.length}</div></div>
-  `;
-
-  const detailData = mine.map(l=> l.type==='MINT' ? {
-    Type:'MINT', Date:l.dateVenteStr, Contrat:l.contrat, Statut_CRM:l.statutCRM,
-    Brut:l.brut, Statut_Brut:l.decommissionne?'—':l.statutPaiementBrut,
-    Activation:l.activation, Statut_Activation:(l.activation===0||l.decommissionne)?'—':l.statutPaiementActivation,
-    Decommissionne:l.decommissionne?'OUI':'NON'
-  } : {
-    Type:'CONSO', Date:l.dateVenteStr, Contrat:l.contrat, Statut_CRM:'—',
-    Brut:l.signature, Statut_Brut:l.statutPaiement, Activation:l.m1+l.m2, Statut_Activation:'—', Decommissionne:'NON'
-  });
-  if(tMesVentes) tMesVentes.destroy();
-  tMesVentes = new Tabulator("#table-mesventes", {
-    data:detailData, layout:"fitDataStretch", height:"360px", placeholder:"Aucune vente trouvée pour ce nom.",
-    columns:[
-      {title:"Type", field:"Type", width:80, formatter:c=>`<span class="tag ${c.getValue()==='MINT'?'ok':'warn'}">${c.getValue()}</span>`},
-      {title:"Date vente", field:"Date", width:100},
-      {title:"Contrat", field:"Contrat", width:110},
-      {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
-      {title:"Brut/Signature (DH)", field:"Brut", width:140, hozAlign:"right"},
-      {title:"Statut Brut", field:"Statut_Brut", width:120, formatter:c=>c.getValue()==='—'?'—':`<span class="tag ${c.getValue()==='Payé'?'ok':'bad'}">${c.getValue()}</span>`},
-      {title:"Activation/Échéances (DH)", field:"Activation", width:160, hozAlign:"right"},
-      {title:"Statut Activation", field:"Statut_Activation", width:130, formatter:c=>c.getValue()==='—'?'—':`<span class="tag ${c.getValue()==='Payé'?'ok':'bad'}">${c.getValue()}</span>`},
-      {title:"Décommissionné", field:"Decommissionne", width:120}
-    ]
-  });
-
-  // par vendredi
-  const byWeek = {};
-  mine.filter(l=>l.type==='MINT' && !l.decommissionne).forEach(l=>{
-    const k = l.vendrediPaiementStr;
-    if(!byWeek[k]) byWeek[k] = {Vendredi:k, Du:0, Paye:0};
-    if(l.statutPaiementBrut==='Payé') byWeek[k].Paye += l.brut; else byWeek[k].Du += l.brut;
-  });
-  const weekData = Object.values(byWeek).sort((a,b)=>{
-    const [da,ma,ya]=a.Vendredi.split('/'); const [db,mb,yb]=b.Vendredi.split('/');
-    return new Date(ya,ma-1,da) - new Date(yb,mb-1,db);
-  });
-  if(tMesVentesSemaine) tMesVentesSemaine.destroy();
-  tMesVentesSemaine = new Tabulator("#table-mesventes-semaine", {
-    data:weekData, layout:"fitDataStretch", height:weekData.length?Math.min(60+weekData.length*36,300)+"px":"70px",
-    placeholder:"Rien à venir.",
-    columns:[
-      {title:"Vendredi", field:"Vendredi", widthGrow:1},
-      {title:"Montant dû (DH)", field:"Du", hozAlign:"right", width:150, formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
-      {title:"Déjà payé (DH)", field:"Paye", hozAlign:"right", width:150}
-    ]
-  });
-
-  // par mois (basé sur le vendredi de paie pour le brut MINT + date de vente pour conso)
-  const byMonth = {};
-  mine.forEach(l=>{
-    const ref = l.type==='MINT' ? l.vendrediPaiement : l.dateVente;
-    if(!ref) return;
-    const k = ref.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
-    if(!byMonth[k]) byMonth[k] = {Mois:k, Net:0, Paye:0, Du:0, _sort:new Date(ref.getFullYear(),ref.getMonth(),1)};
-    if(l.type==='MINT'){
-      if(l.decommissionne) return;
-      byMonth[k].Net += l.net;
-      const paye = (l.statutPaiementBrut==='Payé'?l.brut:0) + (l.statutPaiementActivation==='Payé'?l.activation:0);
-      byMonth[k].Paye += paye; byMonth[k].Du += (l.net-paye);
-    } else {
-      byMonth[k].Net += l.net;
-      if(l.statutPaiement==='Payé') byMonth[k].Paye += l.net; else byMonth[k].Du += l.net;
-    }
-  });
-  const monthData = Object.values(byMonth).sort((a,b)=>a._sort-b._sort).map(({_sort,...r})=>r);
-  if(tMesVentesMois) tMesVentesMois.destroy();
-  tMesVentesMois = new Tabulator("#table-mesventes-mois", {
-    data:monthData, layout:"fitDataStretch", height:monthData.length?Math.min(60+monthData.length*36,300)+"px":"70px",
-    placeholder:"Aucune donnée.",
-    columns:[
-      {title:"Mois", field:"Mois", widthGrow:2, formatter:c=>c.getValue().replace(/^./,ch=>ch.toUpperCase())},
-      {title:"Total généré (DH)", field:"Net", hozAlign:"right", width:150},
-      {title:"Déjà payé (DH)", field:"Paye", hozAlign:"right", width:140, formatter:c=>`<span style="color:#3fd6a4">${c.getValue()} DH</span>`},
-      {title:"Restant dû (DH)", field:"Du", hozAlign:"right", width:140, formatter:c=>`<span style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</span>`}
-    ]
-  });
-}
-
-/* ============================= CALENDRIER DE PAIE ============================= */
-let calRefDate = new Date();
-let calSelected = null; // "DD/MM/YYYY" string du vendredi sélectionné
-
-document.getElementById('calPrev').addEventListener('click', ()=>{ calRefDate = new Date(calRefDate.getFullYear(), calRefDate.getMonth()-1, 1); renderCalendar(); });
-document.getElementById('calNext').addEventListener('click', ()=>{ calRefDate = new Date(calRefDate.getFullYear(), calRefDate.getMonth()+1, 1); renderCalendar(); });
-document.getElementById('calToday').addEventListener('click', ()=>{ calRefDate = new Date(); calSelected = null; renderCalendar(); });
-document.getElementById('calWeekPrev').addEventListener('click', ()=> jumpWeek(-7));
-document.getElementById('calWeekNext').addEventListener('click', ()=> jumpWeek(7));
-
-function jumpWeek(deltaDays){
-  // ancre sur le vendredi actuellement sélectionné (ou le prochain vendredi si rien n'est sélectionné), puis saute d'une semaine pile
-  let anchor = calSelected ? parseDate(calSelected) : nextFriday(new Date());
-  anchor = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + deltaDays);
-  calRefDate = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
-  selectFriday(fmtDate(anchor));
-}
-
-// agrège toutes les lignes MINT non décommissionnées par vendredi de paie
-function buildCalendarStats(){
-  const byDay = {}; // key "DD/MM/YYYY" -> {brutDu, brutPaye, decomCount, byAgent:{}}
-  rawLignes.forEach(l=>{
-    if(l.type!=='MINT' || !l.vendrediPaiement) return;
-    const key = l.vendrediPaiementStr;
-    if(!byDay[key]) byDay[key] = {brutDu:0, brutPaye:0, decomCount:0, byAgent:{}};
-    const day = byDay[key];
-    if(l.decommissionne){ day.decomCount++; return; }
-    if(!day.byAgent[l.agent]) day.byAgent[l.agent] = {du:0, paye:0};
-    if(l.statutPaiementBrut==='Payé'){ day.brutPaye += l.brut; day.byAgent[l.agent].paye += l.brut; }
-    else { day.brutDu += l.brut; day.byAgent[l.agent].du += l.brut; }
-  });
-  return byDay;
-}
-
-function renderCalendar(){
-  if(!rawLignes.length) return;
-  const stats = buildCalendarStats();
-  const y = calRefDate.getFullYear(), m = calRefDate.getMonth();
-  document.getElementById('calMonthLabel').textContent =
-    calRefDate.toLocaleDateString('fr-FR', {month:'long', year:'numeric'}).replace(/^./,c=>c.toUpperCase());
-
-  const grid = document.getElementById('calendar-grid');
-  grid.innerHTML = '';
-  ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].forEach(d=>{
-    const el = document.createElement('div'); el.className='cal-dow'; el.textContent=d; grid.appendChild(el);
-  });
-
-  const firstOfMonth = new Date(y, m, 1);
-  const startOffset = (firstOfMonth.getDay()+6)%7; // lundi=0
-  const daysInMonth = new Date(y, m+1, 0).getDate();
-
-  for(let i=0;i<startOffset;i++){ const e=document.createElement('div'); e.className='cal-cell empty'; grid.appendChild(e); }
-
-  for(let d=1; d<=daysInMonth; d++){
-    const date = new Date(y, m, d);
-    const isFriday = date.getDay()===5;
-    const dateStr = fmtDate(date);
-    const cell = document.createElement('div');
-    cell.className = 'cal-cell' + (isFriday ? ' friday' : '');
-    let inner = `<div class="cal-daynum">${d}</div>`;
-
-    if(isFriday){
-      const s = stats[dateStr];
-      if(s && (s.brutDu>0 || s.brutPaye>0)){
-        cell.classList.add(s.brutDu>0 ? 'due' : 'paid');
-        inner += `<div class="cal-amount ${s.brutDu>0?'due':'paid'}">${s.brutDu>0 ? s.brutDu+' DH dû' : 'Tout payé'}</div>`;
-      } else {
-        inner += `<div class="cal-amount none">—</div>`;
-      }
-      if(s && s.decomCount>0) inner += `<div class="cal-decom-badge" title="${s.decomCount} décommission(s)"></div>`;
-      if(dateStr===calSelected) cell.classList.add('selected');
-      cell.addEventListener('click', ()=> selectFriday(dateStr));
-    }
-    cell.innerHTML = inner;
-    grid.appendChild(cell);
-  }
-
-  if(calSelected) renderCalendarDetail(calSelected);
-}
-
-function selectFriday(dateStr){
-  calSelected = dateStr;
-  renderCalendar();
-  renderCalendarDetail(dateStr);
-}
-
-function renderCalendarDetail(dateStr){
-  const panel = document.getElementById('calDetailPanel');
-  const stats = buildCalendarStats()[dateStr];
-  panel.style.display = 'block';
-  document.getElementById('calDetailTitle').innerHTML = `Détail du vendredi <span style="color:var(--mint)">${dateStr}</span>`;
-
-  const data = stats ? Object.entries(stats.byAgent).map(([agent,v])=>({
-    Agent: agent, Brut_du: v.du, Brut_paye: v.paye, Total: v.du+v.paye
-  })).sort((a,b)=>b.Total-a.Total) : [];
-  const totalDu = data.reduce((s,r)=>s+r.Brut_du,0);
-  const totalPaye = data.reduce((s,r)=>s+r.Brut_paye,0);
-  data.push({Agent:'— TOTAL GLOBAL —', Brut_du:totalDu, Brut_paye:totalPaye, Total:totalDu+totalPaye});
-
-  if(window.tCalDetail) window.tCalDetail.destroy();
-  window.tCalDetail = new Tabulator("#table-cal-detail", {
-    data, layout:"fitDataStretch", height:Math.min(60+data.length*38,360)+"px",
-    columns:[
-      {title:"Agent", field:"Agent", widthGrow:2, formatter:c=> c.getValue().startsWith('—') ? `<b>${c.getValue()}</b>` : c.getValue()},
-      {title:"Brut dû (DH)", field:"Brut_du", hozAlign:"right", formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
-      {title:"Brut payé (DH)", field:"Brut_paye", hozAlign:"right", formatter:c=>`<span style="color:#3fd6a4">${c.getValue()} DH</span>`}
-    ]
-  });
-
-  document.getElementById('calMarkAllPaid').onclick = ()=> bulkSetFriday(dateStr, 'Payé');
-  document.getElementById('calMarkAllUnpaid').onclick = ()=> bulkSetFriday(dateStr, 'Non Payé');
-  const editable = canEditFinance();
-  document.getElementById('calMarkAllPaid').style.display = editable ? '' : 'none';
-  document.getElementById('calMarkAllUnpaid').style.display = editable ? '' : 'none';
-}
-
-function bulkSetFriday(dateStr, value){
-  if(!canEditFinance()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
-  rawLignes.forEach(l=>{
-    if(l.type==='MINT' && l.vendrediPaiementStr===dateStr && !l.decommissionne){
-      setOverride(l.id, 'statutPaiementBrut', value);
-      setOverride(l.id, 'datePaiementBrut', value==='Payé' ? fmtDate(new Date()) : null);
-    }
-  });
-  renderFinance();  // rafraîchit aussi KPI/payroll via ses propres appels
-  renderKPI();
-  renderCalendar();
-  renderCalendarDetail(dateStr);
-  const today = new Date();
-  const dueDate = parseDate(dateStr);
-  const isEarly = value==='Payé' && dueDate && today < dueDate;
-  setStatus(`Brut du vendredi ${dateStr} marqué « ${value} »${isEarly ? ' — AVANCE (avant échéance)' : ''} pour toutes les lignes concernées.`, isEarly?'warn':'ok');
-}
-
-/* ============================= PERSISTANCE (JSON export/import) ============================= */
-document.getElementById('exportOverridesBtn').addEventListener('click', ()=>{
-  const blob = new Blob([JSON.stringify(overrides,null,2)], {type:'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'sipp_overrides_'+new Date().toISOString().slice(0,10)+'.json';
-  a.click();
+        reader.readAsBinaryString(file);
+    });
 });
-document.getElementById('stateInput').addEventListener('change', e=>{
-  const file = e.target.files[0];
-  if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ev=>{
-    try{
-      overrides = JSON.parse(ev.target.result);
-      if(rawLignes.length) recomputeAndRerender();
-      setStatus('État (paiements/décommissions) réimporté.', 'ok');
-    }catch(err){ showError('Fichier d\'état invalide : '+err.message); }
-  };
-  reader.readAsText(file);
-});
-
-/* ============================= EXPORT TRÉSORERIE XLSX ============================= */
-document.getElementById('exportFinanceBtn').addEventListener('click', ()=>{
-  if(!rawLignes.length){ showError('Rien à exporter — importez d\'abord un fichier.'); return; }
-  const rows = rawLignes.map(l=> l.type==='MINT' ? {
-    Type:'MINT', Agent:l.agent, Date_Vente:l.dateVenteStr, Vendredi_Paie:l.vendrediPaiementStr, Contrat:l.contrat,
-    Statut_CRM:l.statutCRM, Brut:l.brut, Statut_Brut:l.decommissionne?'—':l.statutPaiementBrut,
-    Date_Paiement_Brut: l.decommissionne?'':(l.datePaiementBrut||''), Avance: isAvance(l)?'OUI':'NON',
-    Activation:l.activation, Statut_Activation:(l.activation===0||l.decommissionne)?'—':l.statutPaiementActivation,
-    Decommissionne: l.decommissionne?'OUI':'NON', Net:l.net
-  } : {
-    Type:'CONSO', Agent:l.agent, Date_Vente:l.dateVenteStr, Vendredi_Paie:'', Contrat:l.contrat,
-    Statut_CRM:'', Signature:l.signature, Statut_Brut:l.statutPaiement,
-    Date_Paiement_Brut:'', Avance:'NON',
-    M1:l.m1, M2:l.m2, Net:l.net
-  });
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Tresorerie");
-  XLSX.writeFile(wb, 'tresorerie_'+new Date().toISOString().slice(0,10)+'.xlsx');
-});
-</script>
-</div>
-</body>
-</html>
