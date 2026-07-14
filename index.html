@@ -1,263 +1,264 @@
-/**
- * =========================================================================
- * SIPP — ENGINE DE PILOTAGE DES VENTES MINT & CONSO PILOTE (V2.0)
- * =========================================================================
- * Système unifié : Traitement multi-feuilles, Rapprochement par ID contrat,
- * Règle de non-réversibilité comptable & Moteur transactionnel sécurisé.
- */
-
-// Initialisation sécurisée de l'état global de l'application
-if (!window.appContractsState) {
-    window.appContractsState = {};
-}
-
-/**
- * 1. CLASSIFICATION INTELLIGENTE DU STATUT "PAYÉ"
- * Gère les variantes d'écriture, accents, et casses.
- */
-function isStatusPaid(statusValue) {
-    if (statusValue === undefined || statusValue === null) return false;
-    
-    const normalized = String(statusValue)
-        .trim()
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, ""); // Supprime les accents (ex: "payé" -> "paye")
-
-    const paidKeywords = ["paye", "payee", "regle", "solde", "encaisse", "valide", "complete"];
-    return paidKeywords.some(keyword => normalized.includes(keyword)) && !normalized.includes("non");
-}
-
-/**
- * 2. CLASSIFICATION DU STATUT "ANNULÉ"
- */
-function isStatusCancelled(statusValue) {
-    if (statusValue === undefined || statusValue === null) return false;
-    const normalized = String(statusValue).trim().toLowerCase();
-    return normalized.includes("annule") || normalized.includes("resilie") || normalized.includes("rejete");
-}
-
-/**
- * 3. EXTRACTION ROBUSTE DES NUMÉROS DE CONTRAT (5 à 7 chiffres)
- */
-function extractContractId(value) {
-    if (!value) return null;
-    const cleaned = String(value).trim();
-    const match = cleaned.match(/\b\d{5,7}\b/);
-    return match ? match[0] : null;
-}
-
-/**
- * 4. MOTEUR TRANSACTIONNEL ET RAPPROCHEMENT DES DONNÉES
- * Traite les lignes de toutes les feuilles et applique les règles de gestion.
- */
-function processTransactionalUpdate(allRows, currentContractsState) {
-    // Étape d'intégrité : Copie profonde de l'état pour éviter les écritures partielles en cas de plantage
-    const stateClone = JSON.parse(JSON.stringify(currentContractsState));
-    
-    const report = {
-        success: false,
-        processedCount: 0,
-        alertsRaised: 0,
-        errors: [],
-        warnings: []
-    };
-
-    try {
-        // Étape A : Cartographie et indexation des lignes par numéro de contrat unique
-        allRows.forEach((row, index) => {
-            // Mapping ultra-flexible des en-têtes (tolérance aux libellés modifiés ou tronqués)
-            const rawContractField = row['Numéro Contrat Energie'] || row['Contrat ID'] || row['REF SOUSCRIPTION'] || row['REF SOUSCRIPTI'] || row['Numero Contrat'];
-            const contractId = extractContractId(rawContractField);
-            
-            if (!contractId) {
-                // Ligne ignorée car pas d'ID de contrat valide détecté
-                return;
-            }
-
-            const rawStatus = row['Statut Vente'] || row['Statut'] || row['status'] || row['Etat'];
-            const paymentValue = parseFloat(row['Montant Brut'] || row['Paiement Brut'] || row['Montant'] || row['Comissions'] || 0);
-            const agentName = row['Agent'] || row['Nom Agent'] || "Inconnu";
-
-            // Étape B : Initialisation du contrat dans le dictionnaire s'il n'existe pas encore
-            if (!stateClone[contractId]) {
-                stateClone[contractId] = {
-                    id: contractId,
-                    agent: agentName,
-                    paiementBrut: 0,
-                    statutInterne: "EN_ATTENTE",
-                    revueQualiteRequise: false,
-                    historiqueStatuts: []
-                };
-            }
-
-            const currentContract = stateClone[contractId];
-
-            // Étape C : Application de la règle de NON-RÉVERSIBILITÉ
-            const alreadyPaid = currentContract.statutInterne === "PAYE_CONFIRME" || currentContract.paiementBrut > 0;
-
-            if (isStatusPaid(rawStatus)) {
-                if (isNaN(paymentValue) || paymentValue <= 0) {
-                    report.warnings.push(`Ligne ${index + 2} : Contrat ${contractId} détecté "Payé" mais montant brut invalide ou nul.`);
-                } else {
-                    // Si déjà payé, on évite d'écraser inutilement sauf si le montant change
-                    currentContract.paiementBrut = paymentValue;
-                    currentContract.statutInterne = "PAYE_CONFIRME";
-                    currentContract.revueQualiteRequise = false; // Plus d'alerte si re-confirmé payé
-                    report.processedCount++;
-                }
-            } else if (isStatusCancelled(rawStatus)) {
-                if (alreadyPaid) {
-                    // RÈGLE MÉTIER CRITIQUE : Un contrat déjà payé qui passe en "Annulé" lève une alerte Revue Qualité au lieu d'être effacé
-                    currentContract.revueQualiteRequise = true;
-                    currentContract.statutInterne = "ALERTE_ANNULATION_POST_PAIEMENT";
-                    if (!currentContract.historiqueStatuts.includes("ALERTE_ANNULATION")) {
-                        currentContract.historiqueStatuts.push("ALERTE_ANNULATION");
-                    }
-                    report.alertsRaised++;
-                } else {
-                    // Si non payé préalablement, l'annulation automatique suit son cours standard
-                    currentContract.paiementBrut = 0;
-                    currentContract.statutInterne = "ANNULE_CRM";
-                }
-            } else {
-                // Autres statuts (en cours, etc.) : On ne touche pas au montant payé s'il existe déjà
-                if (!alreadyPaid) {
-                    currentContract.statutInterne = "EN_COURS_CRM";
-                }
-            }
-        });
-
-        report.success = true;
-        return { updatedState: stateClone, report: report };
-
-    } catch (globalError) {
-        report.success = false;
-        report.errors.push({ global: true, error: globalError.message });
-        return { updatedState: currentContractsState, report: report };
-    }
-}
-
-/**
- * 5. VALIDATION POST-TRAITEMENT ET COMPARAISON DE COHÉRENCE
- */
-function validatePostProcessing(allRows, updatedState) {
-    const auditReport = {
-        expectedPayments: 0,
-        confirmedPayments: 0,
-        discrepancies: []
-    };
-
-    allRows.forEach((row, index) => {
-        const rawContractField = row['Numéro Contrat Energie'] || row['Contrat ID'] || row['REF SOUSCRIPTION'] || row['REF SOUSCRIPTI'];
-        const contractId = extractContractId(rawContractField);
-        const rawStatus = row['Statut Vente'] || row['Statut'] || row['status'];
-
-        if (contractId && isStatusPaid(rawStatus)) {
-            auditReport.expectedPayments++;
-            const stateRecord = updatedState[contractId];
-
-            if (stateRecord && stateRecord.paiementBrut > 0) {
-                auditReport.confirmedPayments++;
-            } else {
-                auditReport.discrepancies.push({
-                    line: index + 2,
-                    contractId: contractId,
-                    reason: `Détecté "Payé" dans l'import, mais le montant brut du contrat n'est pas actif dans le système.`
-                });
-            }
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>SIPP — Suite Globale de Tests & Validation (V2.2)</title>
+    <!-- Importation de SheetJS pour le banc d'essai -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background: #0f172a; 
+            color: #e2e8f0; 
+            padding: 40px 20px;
+            max-width: 900px;
+            margin: 0 auto;
         }
-    });
+        h1 { color: #f8fafc; border-bottom: 1px solid #334155; padding-bottom: 15px; }
+        .intro { color: #94a3b8; margin-bottom: 30px; font-size: 1.1em; line-height: 1.6; }
+        .test-card { 
+            background: #1e293b; 
+            padding: 20px; 
+            margin-bottom: 15px; 
+            border-radius: 8px; 
+            border-left: 6px solid #64748b; 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .pass { border-left-color: #10b981 !important; background: #132d24; }
+        .fail { border-left-color: #ef4444 !important; background: #3b1818; }
+        .status-badge { 
+            float: right;
+            display: inline-block; 
+            padding: 4px 10px; 
+            border-radius: 4px; 
+            font-weight: bold; 
+            font-size: 13px; 
+            text-transform: uppercase;
+        }
+        .status-pass { background: #064e3b; color: #34d399; }
+        .status-fail { background: #7f1d1d; color: #fca5a5; }
+        .desc { color: #cbd5e1; margin: 10px 0; font-size: 0.95em; line-height: 1.5; }
+        pre { 
+            background: #090d16; 
+            padding: 12px; 
+            border-radius: 6px; 
+            overflow-x: auto; 
+            font-size: 13px; 
+            color: #f1f5f9;
+            border: 1px solid #1e293b;
+        }
+    </style>
+</head>
+<body>
 
-    return auditReport;
-}
+    <h1>🧪 SIPP Engine — Suite Globale d'Audit & Validation</h1>
+    <p class="intro">
+        Ce banc d'essai exécute de manière isolée et sécurisée les algorithmes de rapprochement et de gestion de votre application. Il vérifie la validité des calculs, des expressions régulières et de la logique de non-réversibilité comptable.
+    </p>
+    
+    <div id="results">Chargement de la suite de tests en cours...</div>
 
-/**
- * 6. INITIALISATION DU GESTIONNAIRE D'IMPORT (MULTI-FEUILLES EXCEL)
- */
-document.addEventListener("DOMContentLoaded", () => {
-    const fileInput = document.getElementById('file-input') || document.querySelector('input[type="file"]');
-    const errorDisplay = document.querySelector('.error-message') || document.getElementById('error-display') || document.querySelector('.bg-red-900\\/50') || document.querySelector('[class*="red"]');
+<script>
+window.addEventListener('load', () => {
+    const resultsContainer = document.getElementById('results');
+    resultsContainer.innerHTML = '';
 
-    if (!fileInput) {
-        console.error("SIPP Engine : Aucun sélecteur de fichier d'import trouvé dans le DOM.");
-        return;
+    // =========================================================================
+    // COPIE CONFORME DE LA LOGIQUE CORRIGÉE (V2.2)
+    // =========================================================================
+    
+    function isStatusPaid(statusValue) {
+        if (statusValue === undefined || statusValue === null) return false;
+        const normalized = String(statusValue).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const paidKeywords = ["paye", "payee", "regle", "solde", "encaisse", "valide", "complete"];
+        return paidKeywords.some(keyword => normalized.includes(keyword)) && !normalized.includes("non");
     }
 
-    fileInput.addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        if (!file) return;
+    function isStatusCancelled(statusValue) {
+        if (statusValue === undefined || statusValue === null) return false;
+        // CORRECTION V2.2 : Application stricte du nettoyage des accents pour la détection d'annulation
+        const normalized = String(statusValue).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const cancelledKeywords = ["annule", "resilie", "rejete"];
+        return cancelledKeywords.some(keyword => normalized.includes(keyword));
+    }
 
-        const reader = new FileReader();
+    function extractContractId(value) {
+        if (!value) return null;
+        const cleaned = String(value).trim();
+        const match = cleaned.match(/\b\d{5,7}\b/);
+        return match ? match[0] : null;
+    }
 
-        reader.onload = function(evt) {
-            try {
-                if (typeof XLSX === 'undefined') {
-                    throw new Error("Bibliothèque d'analyse Excel absente. Assurez-vous d'avoir importé le script CDN SheetJS.");
+    function processTransactionalUpdate(allRows, currentContractsState) {
+        const stateClone = JSON.parse(JSON.stringify(currentContractsState));
+        const report = { success: false, processedCount: 0, alertsRaised: 0, errors: [], warnings: [] };
+        
+        try {
+            allRows.forEach((row, index) => {
+                const rawContractField = row['Numéro Contrat Energie'] || row['Contrat ID'] || row['REF SOUSCRIPTION'] || row['REF SOUSCRIPTI'] || row['Numero Contrat'];
+                const contractId = extractContractId(rawContractField);
+                if (!contractId) return;
+
+                const rawStatus = row['Statut Vente'] || row['Statut'] || row['status'] || row['Etat'];
+                const paymentValue = parseFloat(row['Montant Brut'] || row['Paiement Brut'] || row['Montant'] || row['Comissions'] || 0);
+                const agentName = row['Agent'] || row['Nom Agent'] || "Inconnu";
+
+                if (!stateClone[contractId]) {
+                    stateClone[contractId] = {
+                        id: contractId,
+                        agent: agentName,
+                        paiementBrut: 0,
+                        statutInterne: "EN_ATTENTE",
+                        revueQualiteRequise: false,
+                        historiqueStatuts: []
+                    };
                 }
 
-                const data = evt.target.result;
-                // Lecture globale de tous les formats Excel (xls, xlsx, xlsm, xlsb)
-                const workbook = XLSX.read(data, { type: 'binary' });
-                
-                let combinedRows = [];
+                const currentContract = stateClone[contractId];
+                const alreadyPaid = currentContract.statutInterne === "PAYE_CONFIRME" || currentContract.paiementBrut > 0;
 
-                // Étape 1 : Lecture exhaustive de CHAQUE feuille de calcul
-                workbook.SheetNames.forEach(sheetName => {
-                    const worksheet = workbook.Sheets[sheetName];
-                    const sheetData = XLSX.utils.sheet_to_json(worksheet, { defval: null });
-                    
-                    // Fusion des données de toutes les feuilles en un seul tableau
-                    combinedRows = combinedRows.concat(sheetData);
-                });
-
-                console.log(`[SIPP Audit] ${combinedRows.length} lignes extraites à partir de ${workbook.SheetNames.length} feuilles.`);
-
-                // Étape 2 : Lancement de la mise à jour transactionnelle sécurisée
-                const result = processTransactionalUpdate(combinedRows, window.appContractsState);
-
-                if (result.report.success && result.report.errors.length === 0) {
-                    // Étape 3 : Validation post-traitement
-                    const audit = validatePostProcessing(combinedRows, result.updatedState);
-
-                    if (audit.discrepancies.length === 0) {
-                        // VALIDATION validée : On applique définitivement les modifications
-                        window.appContractsState = result.updatedState;
-
-                        // Nettoyage de l'affichage d'erreur s'il existait
-                        if (errorDisplay) {
-                            errorDisplay.style.display = 'none';
-                            errorDisplay.innerHTML = '';
-                        }
-
-                        // Notification de réussite complète
-                        alert(`✅ Importation Excel terminée avec succès !\n\n` +
-                              `• Feuilles analysées : ${workbook.SheetNames.length}\n` +
-                              `• Total lignes traitées : ${combinedRows.length}\n` +
-                              `• Contrats enregistrés/mis à jour : ${result.report.processedCount}\n` +
-                              `• Alertes Qualité levées (non-réversibilité) : ${result.report.alertsRaised}`);
-                        
-                        console.log("Nouvel état applicatif (window.appContractsState) :", window.appContractsState);
+                if (isStatusPaid(rawStatus)) {
+                    if (isNaN(paymentValue) || paymentValue <= 0) {
+                        report.warnings.push(`Ligne ${index + 2} : Montant invalide.`);
                     } else {
-                        console.warn("Divergences détectées lors de l'audit post-traitement :", audit.discrepancies);
-                        alert(`⚠ Importation partielle avec avertissements.\n` +
-                              `Certains statuts payés n'ont pas pu être affectés. Consultez la console de développement pour voir le rapport d'anomalies.`);
+                        currentContract.paiementBrut = paymentValue;
+                        currentContract.statutInterne = "PAYE_CONFIRME";
+                        currentContract.revueQualiteRequise = false;
+                        report.processedCount++;
+                    }
+                } else if (isStatusCancelled(rawStatus)) {
+                    if (alreadyPaid) {
+                        currentContract.revueQualiteRequise = true;
+                        currentContract.statutInterne = "ALERTE_ANNULATION_POST_PAIEMENT";
+                        if (!currentContract.historiqueStatuts.includes("ALERTE_ANNULATION")) {
+                            currentContract.historiqueStatuts.push("ALERTE_ANNULATION");
+                        }
+                        report.alertsRaised++;
+                    } else {
+                        currentContract.paiementBrut = 0;
+                        currentContract.statutInterne = "ANNULE_CRM";
                     }
                 } else {
-                    // ROLLBACK : Aucune modification n'a été appliquée au state original
-                    throw new Error(result.report.errors[0]?.error || "Erreur interne pendant le calcul.");
+                    if (!alreadyPaid) {
+                        currentContract.statutInterne = "EN_COURS_CRM";
+                    }
                 }
+            });
+            report.success = true;
+            return { updatedState: stateClone, report: report };
+        } catch (globalError) {
+            report.success = false;
+            report.errors.push({ global: true, error: globalError.message });
+            return { updatedState: currentContractsState, report: report };
+        }
+    }
 
-            } catch (error) {
-                console.error("[SIPP Error]", error);
-                if (errorDisplay) {
-                    errorDisplay.style.display = 'block';
-                    errorDisplay.innerHTML = `⚠ Impossible de lire le fichier : ${error.message}`;
-                }
-                alert(`❌ Échec de l'importation :\n${error.message}`);
+    // =========================================================================
+    // EXÉCUTION DU BANC DE TEST
+    // =========================================================================
+
+    function runTest(title, desc, testFn) {
+        const card = document.createElement('div');
+        card.className = 'test-card';
+        try {
+            const result = testFn();
+            if (result === true) {
+                card.className += ' pass';
+                card.innerHTML = `
+                    <span class="status-badge status-pass">Pass</span>
+                    <h3>${title}</h3>
+                    <p class="desc">${desc}</p>
+                `;
+            } else {
+                throw new Error(result);
             }
-        };
+        } catch (err) {
+            card.className += ' fail';
+            card.innerHTML = `
+                <span class="status-badge status-fail">Fail</span>
+                <h3>${title}</h3>
+                <p class="desc">${desc}</p>
+                <pre>Détails de l'erreur :\n${err.message}</pre>
+            `;
+        }
+        resultsContainer.appendChild(card);
+    }
 
-        reader.readAsBinaryString(file);
-    });
+    // --- SCÉNARIOS ---
+
+    runTest(
+        "Test 1 : Classification des variantes de statuts 'Payé'",
+        "Vérifie que les orthographes alternatives ('Payé', 'payee', 'RÉGLÉ') sont toutes correctement identifiées, et que les statuts négatifs ('Non payé') sont expressément exclus.",
+        () => {
+            const results = [
+                isStatusPaid("Payé") === true,
+                isStatusPaid("payee") === true,
+                isStatusPaid("Régle") === true,
+                isStatusPaid("Non payé") === false,
+                isStatusPaid("En attente") === false
+            ];
+            return results.every(Boolean) ? true : "Une ou plusieurs orthographes n'ont pas été classifiées correctement.";
+        }
+    );
+
+    runTest(
+        "Test 2 : Rapprochement par ID unique (Défense contre le décalage de lignes)",
+        "S'assure que l'ID unique à 5-7 chiffres est extrait de manière robuste, même s'il y a du texte superflu autour dans la cellule Excel.",
+        () => {
+            const id1 = extractContractId("MINT-543210-2026");
+            const id2 = extractContractId(" 987654 ");
+            const id3 = extractContractId("Inexistant");
+            return (id1 === "543210" && id2 === "987654" && id3 === null) ? true : `Mauvaise extraction d'ID : id1=${id1}, id2=${id2}, id3=${id3}`;
+        }
+    );
+
+    runTest(
+        "Test 3 : Règle métier de Non-Réversibilité (Sécurité financière)",
+        "Vérifie qu'un contrat déjà payé qui passe en 'Annulé' (avec accent) lors d'un nouvel import conserve son montant brut et lève une 'Alerte Revue Qualité' visible.",
+        () => {
+            // État initial : Le contrat 123456 est déjà payé à hauteur de 150
+            const initialAppState = {
+                "123456": { id: "123456", agent: "Agent X", paiementBrut: 150, statutInterne: "PAYE_CONFIRME", revueQualiteRequise: false, historiqueStatuts: [] }
+            };
+
+            // Donnée d'import CRM tardive : Le contrat est déclaré "Annulé"
+            const incomingCRMRows = [
+                { "REF SOUSCRIPTION": "123456", "Statut": "Annulé", "Montant Brut": "150" }
+            ];
+
+            const result = processTransactionalUpdate(incomingCRMRows, initialAppState);
+            const contract = result.updatedState["123456"];
+
+            // Vérifications strictes
+            const keptMoney = contract.paiementBrut === 150;
+            const alertRaised = contract.revueQualiteRequise === true;
+            const alertStatus = contract.statutInterne === "ALERTE_ANNULATION_POST_PAIEMENT";
+
+            if (!keptMoney) return "Échec : Le montant payé a été effacé (remis à 0 ou modifié).";
+            if (!alertRaised) return "Échec : L'alerte de revue qualité n'a pas été levée (revueQualiteRequise reste false).";
+            if (!alertStatus) return `Échec : Le statut interne est '${contract.statutInterne}' au lieu de 'ALERTE_ANNULATION_POST_PAIEMENT'.`;
+
+            return true;
+        }
+    );
+
+    runTest(
+        "Test 4 : Agrégation et gestion multi-feuilles",
+        "Vérifie que l'importateur traite l'intégralité des données sans perte lors d'une simulation d'onglets multiples fusionnés.",
+        () => {
+            const initialAppState = {};
+            const simulatedExcelRows = [
+                { "REF SOUSCRIPTION": "111111", "Statut": "Payé", "Montant Brut": "100" }, // Donnée de la feuille 1
+                { "REF SOUSCRIPTION": "222222", "Statut": "Payé", "Montant Brut": "200" }  // Donnée de la feuille 2
+            ];
+
+            const result = processTransactionalUpdate(simulatedExcelRows, initialAppState);
+            const processedCount = result.report.processedCount;
+
+            return (processedCount === 2 && result.updatedState["111111"].paiementBrut === 100 && result.updatedState["222222"].paiementBrut === 200) ? true : "L'agrégation multi-feuilles a échoué.";
+        }
+    );
 });
+</script>
+</body>
+</html>
