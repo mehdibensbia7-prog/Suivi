@@ -2,16 +2,31 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIPP — Pilotage Ventes MINT & ConsoPilote</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
-  // Fallback local pour SheetJS si le CDN échoue
-  if (typeof XLSX === 'undefined') {
-    console.warn("CDN SheetJS (XLSX) inaccessible, chargement du fallback local...");
-    document.write('<script src="xlsx.full.min.js"><\/script>');
+  window.__xlsxLoadFailed = false;
+  window.__xlsxFallbackAttempted = false;
+  function loadLocalXlsxFallback() {
+    if (window.XLSX || window.__xlsxFallbackAttempted) return;
+    window.__xlsxFallbackAttempted = true;
+    const fallbackScript = document.createElement('script');
+    fallbackScript.src = 'xlsx.full.min.js';
+    fallbackScript.onload = () => {
+      console.log('SheetJS local fallback chargé.');
+      clearError();
+    };
+    fallbackScript.onerror = () => {
+      console.warn('SheetJS local fallback impossible.');
+      showError('La bibliothèque SheetJS est introuvable après deux tentatives. Vérifiez la présence de xlsx.full.min.js dans le dossier du projet.');
+      setStatus('Erreur SheetJS', 'error');
+    };
+    document.head.appendChild(fallbackScript);
   }
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" onerror="window.__xlsxLoadFailed=true; loadLocalXlsxFallback();"></script>
 <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
 <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
 <style>
@@ -69,6 +84,10 @@
   .tag.ok{background:#0d3327;color:var(--mint);}
   .tag.warn{background:#3a2a10;color:var(--amber);}
   .tag.bad{background:#3a1520;color:var(--red);}
+  .status-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid;white-space:nowrap;margin-left:10px;}
+  .status-badge.ok{background:#0f3326;border-color:#2dc38a;color:#c3f7d2;}
+  .status-badge.warn{background:#3f2c10;border-color:#f2c26b;color:#ffe6a8;}
+  .status-badge.error{background:#3d131d;border-color:#f47a86;color:#ffb6c5;}
   .cal-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
   .cal-month-label{font-family:var(--mono);font-size:14px;font-weight:700;min-width:160px;text-align:center;}
   .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;}
@@ -143,6 +162,15 @@
   .login-input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:11px 12px;border-radius:7px;font-size:14px;font-family:var(--mono);}
   .login-error{color:var(--red);font-size:12px;font-family:var(--mono);margin-top:8px;min-height:16px;}
   .role-badge{font-family:var(--mono);font-size:11px;padding:6px 12px;border-radius:20px;background:#0d3327;color:var(--mint);border:1px solid var(--mint);white-space:nowrap;}
+  .confidential-banner{background:#241407;color:var(--amber);border-bottom:1px solid var(--amber);font-size:11.5px;font-family:var(--mono);padding:6px 28px;text-align:center;}
+  /* Modal compare expected */
+  .modal-backdrop{position:fixed;inset:0;background:rgba(2,6,12,0.6);display:flex;align-items:center;justify-content:center;z-index:120}
+  .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;max-width:920px;width:94%;max-height:78vh;overflow:auto}
+  .modal-box h3{margin:0 0 8px}
+  .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+  .diff-row{padding:8px;border-bottom:1px solid var(--line);font-size:13px}
+  .diff-row.match{background:transparent}
+  .diff-row.nomatch{background:linear-gradient(90deg, rgba(232,88,111,0.06), transparent)}
 </style>
 </head>
 <body>
@@ -187,15 +215,43 @@
     </div>
   </div>
 </header>
+<div class="confidential-banner">🔒 Données confidentielles — usage interne uniquement. Ne jamais partager le fichier importé, l'export d'état (.json) ou l'export trésorerie (.xlsx) hors de l'entreprise.</div>
+
+<!-- Auto-run startup notice (visible when auto-run enabled and not suppressed) -->
+<div id="autoRunNotice" style="display:none;background:linear-gradient(90deg,#0e3826,#0b2b1b);border:1px solid #1f8f60;color:var(--mint);padding:12px 16px;margin:12px 28px;border-radius:8px;font-size:13px;position:relative;">
+  <div style="font-weight:700">Info — Auto‑run activé</div>
+  <div style="color:var(--ink-dim);margin-top:6px">Les tests d'import s'exécuteront automatiquement après chaque import. <label style="margin-left:8px;font-weight:500;color:var(--ink-dim);font-size:12px"><input type="checkbox" id="autoRunDontShow"> Ne plus afficher</label></div>
+  <button class="btn" id="dismissAutoRunNotice" style="position:absolute;right:12px;top:12px">OK</button>
+</div>
 
 <div class="toolbar" id="mainToolbar">
-  <label class="file-btn">Importer le fichier .xlsx<input type="file" id="fileInput" accept=".xlsx,.xls"></label>
+  <label class="file-btn">Importer un ou plusieurs fichiers .xlsx<input type="file" id="fileInput" accept=".xlsx,.xls" multiple></label>
+  <button class="btn" id="sessionsBtn">Sessions</button>
   <select id="sheetSelector"><option value="">Feuille…</option></select>
   <span style="width:1px;height:22px;background:var(--line);"></span>
   <button class="btn" id="exportOverridesBtn">Exporter l'état (JSON)</button>
   <label class="btn file-btn" id="stateInputLabel" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);">Importer l'état<input type="file" id="stateInput" accept=".json"></label>
   <button class="btn primary" id="exportFinanceBtn">Exporter Trésorerie (.xlsx)</button>
+  <button class="btn" id="compareExpectedBtn">Comparer attendu</button>
+  <button class="btn" id="exportAuditBtn">Exporter audit</button>
   <span id="status-msg"></span>
+  <span id="status-badge" class="status-badge" style="display:none"></span>
+  <span id="autoRunBadge" class="status-badge" style="display:none"></span>
+</div>
+
+<!-- Diagnostics log -->
+<div id="diagnosticsPanel" style="position:fixed;left:8px;bottom:8px;z-index:99999;max-width:420px;max-height:40vh;overflow:auto;background:rgba(0,0,0,0.85);color:#fff;padding:8px;border-radius:6px;font-size:12px;display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <strong>Diagnostics</strong>
+    <div>
+      <label style="font-size:12px;margin-right:8px"><input type="checkbox" id="autoRunTestsCheckbox"> Auto-run après import</label>
+      <button class="btn" id="runImportTestsBtn" style="font-size:12px;">Exécuter tests d'import</button>
+      <button class="btn" id="exportDiagnosticsBtn" style="font-size:12px;">Exporter logs</button>
+      <button class="btn" id="clearDiagnosticsBtn" style="font-size:12px;">Effacer</button>
+      <button class="btn" id="toggleDiagnosticsBtn" style="font-size:12px;">Fermer</button>
+    </div>
+  </div>
+  <div id="diagnosticsLog" style="max-height:34vh;overflow:auto"></div>
 </div>
 
 <div class="nav">
@@ -286,7 +342,7 @@
       <h2>Suivi Qualité <span class="sub">— aucune donnée financière affichée. Droit de statuer sur une annulation de contrat pour raison qualité uniquement.</span></h2>
       <div class="filters">
         <select id="qualiteFilterAgent"><option value="">Tous les agents</option></select>
-        <select id="qualiteFilterStatut"><option value="">Tous statuts</option><option value="actif">Actif / en cours</option><option value="annule_qualite">Annulé (qualité)</option></select>
+        <select id="qualiteFilterStatut"><option value="">Tous statuts</option><option value="actif">Actif / en cours</option><option value="annule_qualite">Annulé (qualité)</option><option value="revue">⚠ Revue requise</option></select>
       </div>
       <div id="table-qualite" class="table-scroll"></div>
     </div>
@@ -312,25 +368,117 @@
   </div>
 </main>
 
+<!-- Modal container for compare results -->
+<div id="compareModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideCompareModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Résultat de la comparaison attendu vs réel</h3>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <div id="compareSummary" style="font-family:var(--mono);font-size:13px;color:var(--ink-dim);flex:1"></div>
+        <div style="display:flex;gap:6px">
+          <button class="btn" id="filterNonMatchesBtn">Afficher non-correspondances</button>
+          <button class="btn" id="previewCorrectionsBtn">Prévisualiser corrections</button>
+          <button class="btn" id="autoCorrectAgentsBtn">Appliquer corrections agents</button>
+          <button class="btn" id="runRulesBtn">Vérifier règles métier</button>
+        </div>
+      </div>
+      <div id="compareList"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="hideCompareModal()">Fermer</button>
+        <button class="btn primary" id="downloadCompareBtn">Télécharger le rapport</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal import session choice -->
+<div id="importSessionModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideImportSessionModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Choisir le mode d'import</h3>
+      <p>Souhaitez-vous fusionner les nouvelles données dans la session actuelle, ou ouvrir une nouvelle session isolée ?</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" id="importContinueBtn">Poursuivre la session en cours</button>
+        <button class="btn primary" id="importNewBtn">Ouvrir une nouvelle session</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal import summary -->
+<div id="importSummaryModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideImportSummaryModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Résumé de l'import</h3>
+      <div id="importSummaryContent" style="font-family:var(--mono);font-size:13px;color:var(--ink-dim)"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" onclick="hideImportSummaryModal()">Fermer</button>
+        <button class="btn primary" id="downloadImportReportBtn">Télécharger le rapport</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal sessions manager -->
+<div id="sessionsModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideSessionsModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Gestion des sessions</h3>
+          <div style="float:right;margin-top:-28px;margin-right:6px"><span id="appVersionBadge" class="status-badge" style="display:inline-flex;background:transparent;border-color:var(--ink-dim);color:var(--ink-dim)"></span></div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn" id="createSessionBtn">Nouvelle session</button>
+        <label class="btn file-btn" style="background:var(--panel);border:1px solid var(--line);">Importer session<input type="file" id="importSessionFile" accept="application/json" style="display:none"></label>
+        <label class="btn file-btn" style="background:var(--panel);border:1px solid var(--line);">Importer session chiffrée<input type="file" id="importEncryptedFile" accept=".enc,.json.enc" style="display:none"></label>
+        <button class="btn" id="refreshSessionsBtn">Rafraîchir</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <input type="checkbox" id="deleteAfterImport" /> <label for="deleteAfterImport" style="font-size:13px;color:var(--ink-dim)">Supprimer la session importée après import</label>
+      </div>
+      <div style="font-size:12px;color:var(--ink-dim);margin-bottom:8px">
+        <strong>Info :</strong> Vous pouvez importer un fichier `.json` (session) ou un export chiffré `.enc`. Pour les exports chiffrés, il vous sera demandé une passphrase. Les imports ne modifient pas vos sessions existantes sauf si vous cochez l'option ci‑dessus.
+      </div>
+      <div id="sessionsHelpNotice" style="display:none;background:linear-gradient(90deg,#12313a,#0e2630);border:1px solid #2f9aa3;color:var(--ink);padding:10px 12px;margin-bottom:8px;border-radius:8px;font-size:13px;">
+        <div style="font-weight:700">Aide rapide — Gestion des sessions</div>
+        <div style="color:var(--ink-dim);margin-top:6px">Ici vous pouvez créer, importer, exporter, et supprimer des sessions. L'import chiffré demande une passphrase. Les actions sont consignées dans l'audit (IndexedDB).</div>
+        <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between">
+          <label style="font-size:12px;color:var(--ink-dim)"><input type="checkbox" id="sessionsHelpDontShow"> Ne plus afficher</label>
+          <button class="btn" id="dismissSessionsHelpNotice" style="font-size:12px">Fermer</button>
+        </div>
+      </div>
+      <div id="sessionsList" style="max-height:45vh;overflow:auto"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" onclick="hideSessionsModal()">Fermer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal agent mapping editor -->
+<div id="agentMappingModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideAgentMappingModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Édition des orthographes canoniques des agents</h3>
+      <p style="color:var(--ink-dim);margin-top:4px">Vérifiez et corrigez les noms détectés avant application. Les modifications seront persistées.</p>
+      <div id="agentMappingList" style="max-height:40vh;overflow:auto;margin-top:8px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" onclick="hideAgentMappingModal()">Annuler</button>
+        <button class="btn primary" id="applyAgentMappingsBtn">Appliquer les mappings</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <footer>SIPP v1 — moteur de calcul 100% client-side (aucune donnée envoyée à un serveur). Règles de commissionnement : voir cahier des charges.</footer>
 
 <script>
-/* ============================= VÉRIFICATION DÉPENDANCES ============================= */
-window.addEventListener('DOMContentLoaded', () => {
-  if (typeof XLSX === 'undefined') {
-    showError("La bibliothèque SheetJS (XLSX) est manquante. L'importation et l'exportation Excel ne fonctionneront pas. Vérifiez la présence de 'xlsx.full.min.js' dans le dossier.");
-    setStatus("Erreur : XLSX manquant", "error");
-  }
-  if (typeof Tabulator === 'undefined') {
-    showError("La bibliothèque Tabulator est manquante. L'affichage des tableaux ne fonctionnera pas.");
-  }
-});
-
 /* ============================= ÉTAT GLOBAL ============================= */
-let workbook = null;
+let workbooks = [];
 let rawLignes = [];       // toutes les lignes-contrat calculées (MINT + CONSO)
 let overrides = {};       // { lineId: { statutPaiementBrut, statutPaiementActivation, datePaiementBrut, decommissionManuel, motifQualite, statutPaiement (CONSO) } }
+const APP_VERSION = 'v2.2';
 let tSuivi, tFinance, tKPI, tAlertes, tQualite, tMesVentes, tMesVentesSemaine, tMesVentesMois;
+let pendingWorkbooks = null;
+let sippDB = null;
 
 const STATUTS_CHUTE = ['annulee','annule','retractee','retracte','resilie','resiliee','refuse','refusee'];
 const norm = s => (s==null?'':String(s)).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
@@ -338,16 +486,27 @@ const norm = s => (s==null?'':String(s)).toLowerCase().normalize('NFD').replace(
 /* ============================= RÔLES & PERMISSIONS =============================
    ⚠ Contrôle d'accès CÔTÉ CLIENT uniquement (page statique, sans serveur).
    Cela structure l'usage et évite les erreurs de manipulation entre profils,
-   mais n'est PAS une sécurité : quiconque ouvre le code source de la page peut lire
-   les codes ci-dessous. Pour des données sensibles, hébergez cette logique côté serveur.
-   → Changez les codes ici avant diffusion : */
-const ROLE_CODES = {
-  superadmin: 'SUPER-2026',
-  directeur:  'DIRECTION-2026',
-  associes:   'ASSOCIES-2026',
-  qualite:    'QUALITE-2026',
-  agent:      'AGENT-2026'
+   mais CE N'EST PAS UNE SÉCURITÉ INFORMATIQUE : quiconque sait ouvrir la console
+   du navigateur (F12) peut exécuter `currentRole='superadmin'; applyRolePermissions();`
+   et contourner entièrement cet écran. Pour une vraie protection de données sensibles,
+   il faut un serveur avec authentification réelle (voir note de sécurité fournie).
+   Les codes ne sont plus stockés en clair mais en empreinte SHA-256 (non réversible
+   à la simple lecture du code source — mais toujours contournable via la console).
+   → Pour changer un code : ouvrez la console du navigateur et exécutez
+     crypto.subtle.digest('SHA-256', new TextEncoder().encode('MON-NOUVEAU-CODE'))
+       .then(b=>console.log(Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')))
+     puis collez le résultat ci-dessous à la place du hash correspondant. */
+const ROLE_CODE_HASHES = {
+  superadmin: 'aef41367427d6061c8ab191f263dcf0ed40de4e96a5c22cc548d17fd4549b0cb', // SUPER-2026
+  directeur:  '860d72cfe36e939072592263bb45fe06fb8865c93e8b528fb07814788407779c', // DIRECTION-2026
+  associes:   '6e0131726026bc076bb2914f5c1fb6541dd4bf6559be6d351209416413322db6', // ASSOCIES-2026
+  qualite:    'e56f28e0ed0dea773a5cfd69d4099f91c79a8b5f529dd47793a76aa8b8f4e055', // QUALITE-2026
+  agent:      'a5205dc5bc2d999a16f59c5f3d4fedc6d69ac0989d755d41eef71c04389eb38e'  // AGENT-2026
 };
+async function sha256Hex(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(x=>x.toString(16).padStart(2,'0')).join('');
+}
 const ROLE_LABELS = {
   superadmin:'Super Admin', directeur:'Directeur', associes:'Associés', qualite:'Qualité', agent:'Agent'
 };
@@ -362,6 +521,10 @@ let currentRole = null;
 let currentAgentName = null;
 function canEditFinance(){ return currentRole && PERM[currentRole].editFinance; }
 function canEditQuality(){ return currentRole && PERM[currentRole].editQuality; }
+
+// --- anti-brute-force basique : ralentit les essais répétés (dissuasion, pas une protection réelle) ---
+let failedAttempts = 0;
+let lockedUntil = 0;
 
 let selectedRole = null;
 document.querySelectorAll('.role-btn').forEach(b=>{
@@ -385,11 +548,27 @@ document.getElementById('loginBack').addEventListener('click', ()=>{
 document.getElementById('loginSubmit').addEventListener('click', doLogin);
 document.getElementById('loginCode').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 
-function doLogin(){
+async function doLogin(){
   const err = document.getElementById('loginError');
+  if(Date.now() < lockedUntil){
+    err.textContent = `Trop d'essais — réessayez dans ${Math.ceil((lockedUntil-Date.now())/1000)}s.`;
+    return;
+  }
   if(!selectedRole){ err.textContent = 'Sélectionnez un profil.'; return; }
   const code = document.getElementById('loginCode').value.trim();
-  if(code !== ROLE_CODES[selectedRole]){ err.textContent = 'Code incorrect.'; return; }
+  const hash = await sha256Hex(code);
+  if(hash !== ROLE_CODE_HASHES[selectedRole]){
+    failedAttempts++;
+    if(failedAttempts>=5){
+      lockedUntil = Date.now() + 30000;
+      failedAttempts = 0;
+      err.textContent = 'Trop d\'essais — verrouillé 30 secondes.';
+    } else {
+      err.textContent = `Code incorrect (${failedAttempts}/5).`;
+    }
+    return;
+  }
+  failedAttempts = 0;
   if(selectedRole==='agent'){
     const nom = document.getElementById('agentNameInput').value.trim();
     if(!nom){ err.textContent = 'Indiquez votre nom.'; return; }
@@ -400,13 +579,34 @@ function doLogin(){
   document.getElementById('appRoot').style.display = 'block';
   document.getElementById('roleBadge').textContent = ROLE_LABELS[currentRole] + (currentAgentName ? ' · '+currentAgentName : '');
   applyRolePermissions();
+  try{ await openSippDB(); }catch(e){ console.warn('IndexedDB non disponible :', e); }
+  resetInactivityTimer();
 }
-document.getElementById('logoutBtn').addEventListener('click', ()=>{
+function doLogout(reason){
   currentRole = null; currentAgentName = null; selectedRole = null;
+  // purge des données sensibles chargées en mémoire pour cette session
+  rawLignes = []; overrides = {};
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('loginOverlay').style.display = 'flex';
   document.getElementById('loginStep2').style.display = 'none';
   document.querySelectorAll('.role-btn').forEach(x=>x.classList.remove('selected'));
+  document.getElementById('fileInput').value = '';
+  document.getElementById('sheetSelector').innerHTML = '<option value="">Feuille…</option>';
+  if(reason) setTimeout(()=>{ const e=document.getElementById('loginError'); if(e) e.textContent = reason; }, 50);
+  clearTimeout(inactivityTimer);
+}
+document.getElementById('logoutBtn').addEventListener('click', ()=> doLogout());
+
+// --- déconnexion automatique après inactivité (protège les postes partagés/non surveillés) ---
+const INACTIVITY_LIMIT_MS = 15*60*1000; // 15 minutes
+let inactivityTimer = null;
+function resetInactivityTimer(){
+  clearTimeout(inactivityTimer);
+  if(!currentRole) return;
+  inactivityTimer = setTimeout(()=> doLogout('Session expirée après 15 minutes d\'inactivité — reconnectez-vous.'), INACTIVITY_LIMIT_MS);
+}
+['click','keydown','mousemove','touchstart','scroll'].forEach(evt=>{
+  document.addEventListener(evt, ()=>{ if(currentRole) resetInactivityTimer(); }, {passive:true});
 });
 
 function applyRolePermissions(){
@@ -441,9 +641,17 @@ document.querySelectorAll('.navbtn').forEach(b=>{
     if(b.dataset.tab==='mesventes' && rawLignes.length) renderMesVentes();
   });
 });
-function setStatus(msg, kind){
+function setStatus(msg, kind, badge){
   const el = document.getElementById('status-msg');
+  const badgeEl = document.getElementById('status-badge');
   el.textContent = msg; el.className = kind||'';
+  if(badge){
+    badgeEl.textContent = badge;
+    badgeEl.className = 'status-badge ' + (kind||'');
+    badgeEl.style.display = 'inline-flex';
+  } else {
+    badgeEl.style.display = 'none';
+  }
 }
 function showError(msg){
   const el = document.getElementById('banner-error');
@@ -454,35 +662,272 @@ function clearError(){
 }
 
 /* ============================= IMPORT FICHIER ============================= */
-document.getElementById('fileInput').addEventListener('change', function(e){
-  const file = e.target.files[0];
-  if(!file) return;
+document.getElementById('fileInput').addEventListener('change', async function(e){
+  if (!window.XLSX) {
+    // le CDN a peut-être échoué et le fallback local est en cours de chargement (asynchrone) :
+    // on patiente jusqu'à 2s avant de déclarer un échec définitif, pour éviter un faux négatif
+    // si l'utilisateur importe un fichier juste après l'ouverture de la page.
+    setStatus('SheetJS en cours de chargement…', 'warn');
+    for(let i=0; i<20 && !window.XLSX; i++){ await new Promise(r=>setTimeout(r,100)); }
+    if(!window.XLSX){
+      showError('La bibliothèque SheetJS est introuvable (CDN et fallback local ont échoué). Vérifiez votre connexion ou la présence de xlsx.full.min.js dans le dossier du projet.');
+      setStatus('Erreur SheetJS', 'error');
+      return;
+    }
+  }
+  const files = Array.from(e.target.files || []);
+  if(!files.length){
+    workbooks = [];
+    rawLignes = [];
+    renderAll();
+    setStatus('Aucun fichier sélectionné.', 'warn');
+    return;
+  }
   clearError();
-  setStatus('Lecture du fichier…');
-  const reader = new FileReader();
-  reader.onload = function(ev){
-    try{
-      const data = new Uint8Array(ev.target.result);
-      workbook = XLSX.read(data, {type:'array', cellDates:true});
+  setStatus('Lecture des fichiers…');
+  const loadFile = file => new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = function(ev){
+      try{
+        const data = new Uint8Array(ev.target.result);
+        const workbook = XLSX.read(data, {type:'array', cellDates:true});
+        resolve({fileName:file.name, workbook});
+      }catch(err){
+        reject(new Error('Impossible de lire '+file.name+' : '+err.message));
+      }
+    };
+    reader.onerror = ()=> reject(new Error('Erreur de lecture disque du fichier '+file.name+'.'));
+    reader.readAsArrayBuffer(file);
+  });
+  Promise.all(files.map(loadFile))
+    .then(results => {
+      workbooks = results;
       const sel = document.getElementById('sheetSelector');
       sel.innerHTML = '<option value="">Feuille…</option>';
-      workbook.SheetNames.forEach(n=>{
-        const o = document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o);
+      workbooks.forEach(doc => {
+        doc.workbook.SheetNames.forEach(name => {
+          const option = document.createElement('option');
+          option.value = doc.fileName + '||' + name;
+          option.textContent = `${doc.fileName} / ${name}`;
+          sel.appendChild(option);
+        });
       });
-      if(workbook.SheetNames.length){ sel.value = workbook.SheetNames[0]; processSheet(); }
-      setStatus('Fichier chargé : '+file.name, 'ok');
-    }catch(err){
-      showError('Impossible de lire le fichier : '+err.message);
+      if(workbooks.length && workbooks[0].workbook.SheetNames.length){
+        sel.value = workbooks[0].fileName + '||' + workbooks[0].workbook.SheetNames[0];
+      }
+      // delay processing until user chooses session behaviour
+      pendingWorkbooks = results;
+      showImportSessionModal();
+      setStatus('Fichiers prêts — en attente du choix de session d\'import.', 'warn');
+    })
+    .catch(err => {
+      workbooks = [];
+      rawLignes = [];
+      renderAll();
+      showError(err.message);
       setStatus('Échec de lecture', 'error');
-    }
-  };
-  reader.onerror = ()=>{ showError('Erreur de lecture disque du fichier.'); };
-  reader.readAsArrayBuffer(file);
+    });
 });
-document.getElementById('sheetSelector').addEventListener('change', processSheet);
+// la liste déroulante sert d'information / d'inspection manuelle ; elle ne relance PAS un parsing
+// partiel — l'import scanne systématiquement TOUT le classeur (le fichier peut avoir la table de
+// suivi et l'export CRM sur la même feuille, empilés, OU sur deux feuilles séparées).
+document.getElementById('sheetSelector').addEventListener('change', ()=>{
+  const fullKey = document.getElementById('sheetSelector').value;
+  if(fullKey) renderRawSheetPreview(fullKey);
+});
 
-/* ============================= DÉTECTION DES 2 TABLES ============================= */
+// handlers for import session modal
+document.getElementById('importContinueBtn').addEventListener('click', async ()=>{
+  hideImportSessionModal();
+  await openSippDB();
+  let sess = getCurrentSessionId();
+  if(!sess){ const meta = await createSession('Session ' + new Date().toLocaleString()); sess = meta.id; }
+  workbooks = pendingWorkbooks; pendingWorkbooks = null;
+  try{ autoDetectAndProcess();
+    const report = await persistUpsert(sess);
+    document.getElementById('importSummaryContent').textContent = JSON.stringify(report,null,2);
+    showImportSummaryModal();
+    setStatus(`Import fusionné dans la session (${sess}) — ${report.added} ajoutées, ${report.updated} mises à jour, ${report.ignored} ignorées.`, 'ok');
+  }catch(e){ showError('Erreur après import: '+e.message); setStatus('Erreur import','error'); }
+});
+
+document.getElementById('importNewBtn').addEventListener('click', async ()=>{
+  hideImportSessionModal();
+  await openSippDB();
+  const meta = await createSession('Session ' + new Date().toLocaleString());
+  const sess = meta.id;
+  workbooks = pendingWorkbooks; pendingWorkbooks = null;
+  try{ autoDetectAndProcess();
+    const report = await persistUpsert(sess);
+    document.getElementById('importSummaryContent').textContent = JSON.stringify(report,null,2);
+    showImportSummaryModal();
+    setStatus(`Nouvelle session créée (${sess}) — ${report.added} ajoutées, ${report.updated} mises à jour, ${report.ignored} ignorées.`, 'ok');
+  }catch(e){ showError('Erreur après import: '+e.message); setStatus('Erreur import','error'); }
+});
+
+// download report
+document.getElementById('downloadImportReportBtn').addEventListener('click', ()=>{
+  const txt = document.getElementById('importSummaryContent').textContent || '{}';
+  const blob = new Blob([txt],{type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'import_report_'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+});
+
+// export audit
+document.getElementById('exportAuditBtn').addEventListener('click', async ()=>{
+  try{
+    await openSippDB();
+    const tx = sippDB.transaction(['audit'],'readonly'); const store = tx.objectStore('audit'); const all=[];
+    const req = store.openCursor();
+    req.onsuccess = ev => {
+      const cur = ev.target.result; if(!cur){ const txt = JSON.stringify(all,null,2); const pass = prompt('Passphrase pour chiffrer l\'audit (laisser vide = non chiffré)'); if(pass && pass.trim()){ encryptAndDownload(txt, pass.trim(), 'audit_'+new Date().toISOString().slice(0,10)+'.enc'); } else { const blob = new Blob([txt],{type:'application/json'}); const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'audit_'+new Date().toISOString().slice(0,10)+'.json'; a.click(); } return; } all.push(cur.value); cur.continue(); };
+    req.onerror = ()=> { alert('Erreur export audit'); };
+  }catch(e){ alert('Erreur export audit: '+e.message); }
+});
+
+// sessions UI wiring
+document.getElementById('sessionsBtn').addEventListener('click', ()=> showSessionsModal());
+document.getElementById('refreshSessionsBtn').addEventListener('click', ()=> loadAndRenderSessions());
+document.getElementById('createSessionBtn').addEventListener('click', async ()=>{ const name = prompt('Nom de la nouvelle session'); if(!name) return; await openSippDB(); const meta = await createSession(name); loadAndRenderSessions(); setStatus('Session créée: '+meta.name,'ok'); });
+document.getElementById('importSessionFile').addEventListener('change', async function(e){
+  const f = this.files[0]; if(!f) return; this.value='';
+  try{
+    // If file looks encrypted by extension, ask passphrase first
+    const name = (f.name||'').toLowerCase();
+    if(/\.enc$/.test(name) || /\.json\.enc$/.test(name)){
+      const pass = prompt('Passphrase pour déchiffrer l\'import (.enc)');
+      if(!pass){ alert('Passphrase requise'); return; }
+      const txt = await f.text();
+      let parsed;
+      try{ parsed = JSON.parse(txt); }catch(e){ alert('Fichier .enc invalide (JSON attendu)'); return; }
+      if(!(parsed && parsed.salt && parsed.iv && parsed.ct)){ alert('Payload chiffré invalide'); return; }
+      const clear = await decryptPayload(parsed, pass);
+      const payload = JSON.parse(clear);
+      const newId = await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,''), {type:'application/json'}));
+      if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(payload.meta?payload.meta.name:newId),'ok'); }
+      return;
+    }
+
+    // Not .enc: read and inspect content
+    const txt = await f.text();
+    let parsed;
+    try{ parsed = JSON.parse(txt); }catch(e){ parsed = null; }
+    if(parsed && parsed.meta && parsed.lines){ // plain session JSON
+      const newId = await importSessionJSON(new File([txt], f.name, {type:'application/json'}));
+      if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(parsed.meta?parsed.meta.name:newId),'ok'); }
+      return;
+    }
+    // if looks like encrypted payload without .enc extension
+    if(parsed && parsed.salt && parsed.iv && parsed.ct){
+      const pass = prompt('Passphrase pour déchiffrer l\'import');
+      if(!pass) { alert('Passphrase requise'); return; }
+      const clear = await decryptPayload(parsed, pass);
+      const payload = JSON.parse(clear);
+      const newId = await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,'')+'.json', {type:'application/json'}));
+      if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(payload.meta?payload.meta.name:newId),'ok'); }
+      return;
+    }
+
+    // fallback: try to parse as session JSON raw
+    try{ const payload = JSON.parse(txt); const newId = await importSessionJSON(new File([JSON.stringify(payload)], f.name, {type:'application/json'})); if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(payload.meta?payload.meta.name:newId),'ok'); } }catch(err){ alert('Fichier d\'import invalide'); }
+  }catch(e){ alert('Erreur import: '+e.message); }
+});
+
+// explicit encrypted import button handler
+document.getElementById('importEncryptedFile').addEventListener('change', async function(e){
+  const f = this.files[0]; this.value=''; if(!f) return;
+  try{
+    const txt = await f.text();
+    let parsed; try{ parsed = JSON.parse(txt); }catch(e){ alert('Fichier chiffré invalide'); return; }
+    if(!(parsed && parsed.salt && parsed.iv && parsed.ct)){ alert('Format chiffré inattendu'); return; }
+    const pass = prompt('Passphrase pour déchiffrer l\'import chiffré'); if(!pass) { alert('Passphrase requise'); return; }
+    const clear = await decryptPayload(parsed, pass);
+    const payload = JSON.parse(clear);
+    const newId = await importSessionJSON(new File([JSON.stringify(payload)], f.name.replace(/\.enc$/,''), {type:'application/json'}));
+    if(newId && document.getElementById('deleteAfterImport') && document.getElementById('deleteAfterImport').checked){ await deleteSessionById(newId); setStatus('Session importée puis supprimée: '+(payload.meta?payload.meta.name:newId),'ok'); }
+  }catch(e){ alert('Erreur import chiffré: '+e.message); }
+});
+
+// Diagnostics panel controls
+document.getElementById('toggleDiagnosticsBtn').addEventListener('click', ()=>{ const p=document.getElementById('diagnosticsPanel'); p.style.display = p.style.display==='none'?'block':'none'; });
+document.getElementById('clearDiagnosticsBtn').addEventListener('click', ()=>{ document.getElementById('diagnosticsLog').innerHTML=''; });
+
+// export diagnostics as file
+document.getElementById('exportDiagnosticsBtn').addEventListener('click', ()=>{
+  const txt = document.getElementById('diagnosticsLog').innerText || '';
+  const blob = new Blob([txt], {type:'text/plain'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'diagnostics_'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'_')+'.log'; a.click();
+});
+
+// run import test suite and append results
+document.getElementById('runImportTestsBtn').addEventListener('click', async ()=>{
+  appendDiagnostic('info','Lancement tests','La suite de tests d\'import démarre');
+  try{
+    const res = await runImportTestSuite();
+    appendDiagnostic('info','Tests terminés', JSON.stringify(res.summary||res).slice(0,1000));
+  }catch(e){ appendDiagnostic('error','Erreur tests', String(e)); }
+});
+
+// initialize auto-run checkbox state and listener + visible badge
+try{
+  const autoChk = document.getElementById('autoRunTestsCheckbox');
+  const autoBadge = document.getElementById('autoRunBadge');
+  function setAutoBadge(on){ if(!autoBadge) return; if(on){ autoBadge.textContent = 'Auto-run: ON'; autoBadge.className='status-badge ok'; autoBadge.style.display='inline-flex'; } else { autoBadge.style.display='none'; } }
+  // enable auto-run by default for all users unless explicitly set
+  let enabled = localStorage.getItem('sipp.autoRunTests');
+  if(enabled === null){ enabled = 'true'; localStorage.setItem('sipp.autoRunTests','true'); }
+  const isEnabled = enabled === 'true';
+  autoChk.checked = isEnabled;
+  setAutoBadge(isEnabled);
+  autoChk.addEventListener('change', function(){
+    const on = this.checked;
+    localStorage.setItem('sipp.autoRunTests', on ? 'true' : 'false');
+    appendDiagnostic('info','Auto-run tests', on ? 'Activé' : 'Désactivé');
+    setAutoBadge(on);
+  });
+}catch(e){ console.warn('Auto-run checkbox init failed', e); }
+
+// show startup notice if auto-run enabled and user hasn't suppressed it
+try{
+  const notice = document.getElementById('autoRunNotice');
+  const dontShow = localStorage.getItem('sipp.autoRunDontShow') === 'true';
+  const enabledNow = localStorage.getItem('sipp.autoRunTests') === 'true';
+  if(notice && enabledNow && !dontShow){ notice.style.display='block'; }
+  const dismiss = document.getElementById('dismissAutoRunNotice');
+  if(dismiss){ dismiss.addEventListener('click', ()=>{
+    const cb = document.getElementById('autoRunDontShow'); if(cb && cb.checked) localStorage.setItem('sipp.autoRunDontShow','true');
+    if(notice) notice.style.display='none';
+  }); }
+}catch(e){ console.warn('autoRun notice init failed', e); }
+
+function appendDiagnostic(level, title, detail){
+  try{
+    const log = document.getElementById('diagnosticsLog');
+    const row = document.createElement('div'); row.style.padding='6px'; row.style.borderBottom='1px solid rgba(255,255,255,0.06)';
+    const time = new Date().toISOString().slice(11,19);
+    row.innerHTML = `<div style="font-weight:600">[${time}] ${title} <span style=\"color:var(--ink-dim);font-weight:400;margin-left:6px;font-size:11px\">${level}</span></div><div style=\"font-size:12px;color:#ddd;white-space:pre-wrap;margin-top:4px\">${detail||''}</div>`;
+    log.insertBefore(row, log.firstChild);
+    document.getElementById('diagnosticsPanel').style.display='block';
+  }catch(e){ console.warn('Diag append failed', e); }
+}
+
+async function decryptPayload(payload, pass){
+  try{
+    const salt = payload.salt;
+    const iv = new Uint8Array(payload.iv);
+    const ctStr = atob(payload.ct);
+    const ctArr = new Uint8Array(ctStr.length);
+    for(let i=0;i<ctStr.length;i++) ctArr[i] = ctStr.charCodeAt(i);
+    const key = await deriveKeyFromPass(pass, salt);
+    const plainBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ctArr.buffer);
+    const dec = new TextDecoder();
+    appendDiagnostic('info','Déchiffrement réussi','');
+    return dec.decode(plainBuf);
+  }catch(e){ appendDiagnostic('error','Échec déchiffrement', String(e)); throw e; }
+}
+
+/* ============================= DÉTECTION DES 2 TABLES (sur tout le classeur) ============================= */
 // Table A = suivi commercial (formulaire agents). Table B = export CRM (statuts contrats).
+// Elles peuvent être : (1) empilées dans la même feuille, ou (2) sur deux feuilles distinctes.
 function findHeaderIndex(rows, candidates){
   for(let i=0;i<rows.length;i++){
     const row = rows[i] || [];
@@ -494,80 +939,197 @@ function findHeaderIndex(rows, candidates){
   return -1;
 }
 function colIndexByNames(header, names){
+  // 1) correspondance exacte d'abord
   for(const name of names){
     const target = norm(name);
     for(let i=0;i<header.length;i++){
       if(norm(header[i]) === target) return i;
     }
   }
+  // 2) repli tolérant : préfixe commun (gère les libellés tronqués/variables entre exports CRM,
+  //    ex. "REF SOUSCRIPTI" vs "REF SOUSCRIPTION")
+  for(const name of names){
+    const target = norm(name);
+    for(let i=0;i<header.length;i++){
+      const h = norm(header[i]);
+      if(h && target && (h.startsWith(target) || target.startsWith(h))) return i;
+    }
+  }
   return -1;
 }
-
-function processSheet(){
-  clearError();
-  const name = document.getElementById('sheetSelector').value;
-  if(!workbook || !name) return;
-  try{
-    const ws = workbook.Sheets[name];
-    const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:null});
-    if(!rows.length) throw new Error('Feuille vide.');
-
-    const idxA = findHeaderIndex(rows, ['Horodateur','Date de Vente','Nom du Commercial']);
-    if(idxA === -1) throw new Error('Impossible de localiser l\'en-tête de la table de suivi (colonne "Date de Vente" ou "Nom du Commercial" introuvable).');
-    const headerA = rows[idxA];
-
-    // cherche un 2e en-tête (export CRM) après idxA
-    let idxB = -1;
-    for(let i=idxA+1;i<rows.length;i++){
-      const row = rows[i]||[];
-      if(row.some(c=>norm(c)==='ref souscripti' || norm(c).startsWith('ref souscri'))){ idxB = i; break; }
-    }
-    const bodyA = idxB===-1 ? rows.slice(idxA+1) : rows.slice(idxA+1, idxB);
-    const headerB = idxB===-1 ? null : rows[idxB];
-    const bodyB = idxB===-1 ? [] : rows.slice(idxB+1);
-
-    const cA = {
-      dateVente: colIndexByNames(headerA, ['Date de Vente']),
-      typeContrat: colIndexByNames(headerA, ['Type de Contrat']),
-      produit: colIndexByNames(headerA, ['Produit Vendu']),
-      contratEnergie: colIndexByNames(headerA, ['Numéro Contrat Energie','Numero Contrat Energie']),
-      nomClient: colIndexByNames(headerA, ['Nom du Client']),
-      prenomClient: colIndexByNames(headerA, ['Prénom du Client','Prenom du Client']),
-      commercial: colIndexByNames(headerA, ['Nom du Commercial']),
-      contratConso: colIndexByNames(headerA, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote'])
-    };
-    if(cA.dateVente===-1 || cA.commercial===-1 || cA.contratEnergie===-1){
-      throw new Error('Colonnes essentielles introuvables dans la table de suivi (Date de Vente / Nom du Commercial / Numéro Contrat Energie).');
-    }
-
-    let cB = null, refMap = {};
-    if(headerB){
-      cB = {
-        ref: colIndexByNames(headerB, ['REF SOUSCRIPTI']),
-        etat: colIndexByNames(headerB, ['ETAT']),
-        dateAct: colIndexByNames(headerB, ['DATE ACTIVATIO']),
-        dateResil: colIndexByNames(headerB, ['DATE RESILIATIO']),
-        offre: colIndexByNames(headerB, ['OFFRE'])
+function findTableBHeaderIndex(rows){
+  for(let i=0;i<rows.length;i++){
+    const row = rows[i]||[];
+    if(row.some(c=>norm(c).startsWith('ref souscri'))) return i;
+  }
+  return -1;
+}
+function findFeuil2HeaderIndex(rows){
+  for(let i=0;i<rows.length;i++){
+    const row = rows[i]||[];
+    const hasContract = row.some(c=>{
+      const n = norm(c);
+      return n.startsWith('numero contract') || n.startsWith('numero de contrat') || n.startsWith('numero contract');
+    });
+    const hasStatus = row.some(c=>{
+      const n = norm(c);
+      return n.startsWith('statut') || n.startsWith('statut de vente');
+    });
+    if(hasContract && hasStatus) return i;
+  }
+  return -1;
+}
+function normalizeRef(ref){
+  if(ref===null||ref===undefined) return '';
+  let s = String(ref).trim();
+  // Excel can export numeric IDs as floats, keep digits only for stability.
+  s = s.replace(/\.0+$/,'');
+  s = s.replace(/[^0-9]/g,'');
+  return s;
+}
+function buildStatusMap(sources){
+  const map = {};
+  sources.forEach(src=>{
+    const {rows, header, type, fileName, sheetName} = src;
+    if(type==='crm'){
+      const cB = {
+        ref: colIndexByNames(header, ['REF SOUSCRIPTION','REF SOUSCRIPTI','REF SOUSCR','REF SOUSCRIP'] ),
+        etat: colIndexByNames(header, ['ETAT','STATUT','STATE']),
+        dateAct: colIndexByNames(header, ['DATE ACTIVATION','DATE ACTIVATIO','DATE DEBUT','DATE ACTI']),
+        dateResil: colIndexByNames(header, ['DATE RESILIATION','DATE RESILIATIO','DATE FIN','DATE RESI'])
       };
-      bodyB.forEach(r=>{
+      rows.forEach(r=>{
         if(!r) return;
-        const ref = r[cB.ref];
-        if(ref===null || ref===undefined || String(ref).trim()==='') return;
-        refMap[String(ref).trim()] = {
-          etat: cB.etat!==-1 ? r[cB.etat] : null,
-          dateAct: cB.dateAct!==-1 ? r[cB.dateAct] : null,
-          dateResil: cB.dateResil!==-1 ? r[cB.dateResil] : null
+        const ref = normalizeRef(r[cB.ref]);
+        if(!ref) return;
+        const etat = cB.etat!==-1 ? r[cB.etat] : null;
+        const existing = map[ref] || {etat:null, dateAct:null, dateResil:null, sources:[]};
+        const mergedEtat = existing.etat && existing.etat !== etat ? `${existing.etat} / ${etat}` : etat || existing.etat;
+        map[ref] = {
+          etat: mergedEtat || existing.etat,
+          dateAct: existing.dateAct || (cB.dateAct!==-1 ? r[cB.dateAct] : null),
+          dateResil: existing.dateResil || (cB.dateResil!==-1 ? r[cB.dateResil] : null),
+          sources: [...existing.sources, `${fileName}:${sheetName}`]
+        };
+      });
+    } else if(type==='feuil2'){
+      const cB = {
+        ref: colIndexByNames(header, ['numero contract','numero de contrat','numéro contract','numéro de contrat']),
+        etat: colIndexByNames(header, ['statut','statut de vente','etat']),
+        prelev: colIndexByNames(header, ['prelevement','prelevment','prélèvement'])
+      };
+      rows.forEach(r=>{
+        if(!r) return;
+        const ref = normalizeRef(r[cB.ref]);
+        if(!ref) return;
+        let etatRaw = cB.etat!==-1 ? r[cB.etat] : null;
+        const normalized = norm(etatRaw);
+        if(normalized.includes('actif') || normalized.includes('activ')) etatRaw = 'Activé';
+        else if(normalized.includes('sign')) etatRaw = 'Signé';
+        else if(normalized.includes('annul') || normalized.includes('annule')) etatRaw = 'Annulée';
+        const existing = map[ref] || {etat:null, dateAct:null, dateResil:null, sources:[]};
+        const mergedEtat = existing.etat && existing.etat !== etatRaw ? `${existing.etat} / ${etatRaw}` : etatRaw || existing.etat;
+        map[ref] = {
+          etat: mergedEtat || existing.etat,
+          dateAct: existing.dateAct,
+          dateResil: existing.dateResil,
+          sources: [...existing.sources, `${fileName}:${sheetName}`]
         };
       });
     }
+  });
+  return map;
+}
 
-    buildLignes(bodyA, cA, refMap, !!headerB);
+function autoDetectAndProcess(){
+  clearError();
+  if(!workbooks.length) return;
+  try{
+    const aSources = [];
+    const statusSources = [];
+    const allSheetNames = [];
+
+    workbooks.forEach(doc => {
+      doc.workbook.SheetNames.forEach(sheetName => {
+        const rows = XLSX.utils.sheet_to_json(doc.workbook.Sheets[sheetName], {header:1, raw:false, defval:null});
+        if(!rows.length) return;
+        allSheetNames.push(`${doc.fileName}:${sheetName}`);
+
+        const idxA = findHeaderIndex(rows, ['Horodateur','Date de Vente','Nom du Commercial']);
+        if(idxA !== -1){
+          const headerA = rows[idxA];
+          const testC = colIndexByNames(headerA, ['Date de Vente']);
+          const testAgent = colIndexByNames(headerA, ['Nom du Commercial']);
+          const testContrat = colIndexByNames(headerA, ['Numéro Contrat Energie','Numero Contrat Energie']);
+          if(testC !== -1 && testAgent !== -1 && testContrat !== -1){
+            aSources.push({fileName:doc.fileName, sheetName, idxA, rows, headerA});
+          }
+        }
+
+        const idxB = findTableBHeaderIndex(rows);
+        if(idxB !== -1){
+          statusSources.push({type:'crm', fileName:doc.fileName, sheetName, idx:idxB, rows, header:rows[idxB]});
+        }
+
+        const idxF2 = findFeuil2HeaderIndex(rows);
+        if(idxF2 !== -1){
+          statusSources.push({type:'feuil2', fileName:doc.fileName, sheetName, idx:idxF2, rows, header:rows[idxF2]});
+        }
+      });
+    });
+
+    if(!aSources.length){
+      throw new Error('Impossible de localiser la table de suivi des ventes (colonnes "Date de Vente" / "Nom du Commercial") dans aucune des feuilles chargées : ' + allSheetNames.join(', ') + '.');
+    }
+
+    const statusMap = buildStatusMap(statusSources.map(src=>({
+      rows: src.rows.slice(src.idx+1),
+      header: src.header,
+      type: src.type,
+      fileName: src.fileName,
+      sheetName: src.sheetName
+    })));
+
+    if(!Object.keys(statusMap).length){
+      showError('Aucun statut contractuel exploitable trouvé dans les fichiers chargés — les contrats MINT resteront en erreur de rapprochement CRM.');
+    }
+
+    const aBodies = aSources.map(src => ({
+      header: src.headerA,
+      rows: src.rows.slice(src.idxA+1),
+      fileName: src.fileName,
+      sheetName: src.sheetName
+    }));
+    buildLignes(aBodies, statusMap, statusSources.length > 0);
     renderAll();
-    setStatus(`Analyse OK — ${bodyA.filter(r=>r&&r[cA.dateVente]).length} ventes brutes, ${rawLignes.length} lignes contrat, CRM ${headerB?'rapproché':'absent'}.`, 'ok');
+
+    const uniqueA = aSources.map(src => `${src.fileName}:${src.sheetName}`).join(' ; ');
+    const crmCount = statusSources.filter(s=>s.type==='crm').length;
+    const feuil2Count = statusSources.filter(s=>s.type==='feuil2').length;
+    const detailStatus = [];
+    if(crmCount) detailStatus.push(`CRM ${crmCount}`);
+    if(feuil2Count) detailStatus.push(`Feuil2 ${feuil2Count}`);
+    const statusDetail = detailStatus.length ? ` · statuts détectés : ${detailStatus.join(' + ')}` : ' · aucun statut détecté';
+    const badgeText = detailStatus.length ? detailStatus.join(' + ') : 'Aucun statut détecté';
+    setStatus(`Analyse OK — sources ventes : ${uniqueA}${statusDetail} · lignes calculées : ${rawLignes.length}.`, statusSources.length ? 'ok' : 'warn', badgeText);
   }catch(err){
+    rawLignes = [];
+    renderAll();
     showError(err.message);
-    setStatus('Échec de l\'analyse', 'error');
+    setStatus('Échec de l\'analyse — aucune donnée affichée', 'error');
   }
+}
+
+function renderRawSheetPreview(sheetKey){
+  // aperçu brut de la feuille sélectionnée (aide au diagnostic), sans relancer le moteur de calcul
+  const [fileName, sheetName] = sheetKey.split('||');
+  const doc = workbooks.find(w=>w.fileName===fileName);
+  if(!doc){
+    setStatus('Feuille non trouvée : '+sheetKey, 'error');
+    return;
+  }
+  const rows = XLSX.utils.sheet_to_json(doc.workbook.Sheets[sheetName], {header:1, raw:false, defval:null});
+  setStatus(`Feuille « ${sheetName} » de ${fileName} : ${rows.length} lignes brutes (aperçu seulement — les données affichées restent celles détectées automatiquement au chargement).`, 'ok');
 }
 
 /* ============================= EXTRACTION CONTRATS ============================= */
@@ -623,87 +1185,458 @@ function setOverride(id, key, value){
   return line;
 }
 
+/* ============================= PERSISTENCE (IndexedDB) ============================= */
+function openSippDB(){
+  return new Promise((resolve,reject)=>{
+    if(sippDB) return resolve(sippDB);
+    const req = indexedDB.open('sipp-db', 1);
+    req.onupgradeneeded = ev => {
+      const db = ev.target.result;
+      if(!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions',{keyPath:'id'});
+      if(!db.objectStoreNames.contains('lignes')) db.createObjectStore('lignes',{keyPath:'key'});
+      if(!db.objectStoreNames.contains('audit')) db.createObjectStore('audit',{autoIncrement:true});
+    };
+    req.onsuccess = ev => { sippDB = ev.target.result; resolve(sippDB); };
+    req.onerror = ev => reject(ev.target.error);
+  });
+}
+
+function createSession(name){
+  const id = 'sess-'+Date.now();
+  const meta = {id, name:name||('Session '+new Date().toLocaleString()), createdAt:new Date().toISOString(), createdBy: currentRole||'unknown'};
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['sessions'],'readwrite');
+    const store = tx.objectStore('sessions');
+    store.put(meta);
+    tx.oncomplete = ()=>{ localStorage.setItem('sipp.currentSessionId', id); resolve(meta); };
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+
+function getCurrentSessionId(){ return localStorage.getItem('sipp.currentSessionId') || null; }
+async function setCurrentSessionId(id){
+  localStorage.setItem('sipp.currentSessionId', id);
+  try{
+    await openSippDB();
+    const lignes = await getAllLignesForSession(id);
+    // replace in-memory rawLignes and re-run renders
+    rawLignes = (lignes||[]).map(l=>Object.assign({}, l));
+    // rebuild any caches if needed
+    renderAll();
+    setStatus('Session chargée: '+(id||'null'),'ok');
+  }catch(e){ console.warn('Erreur chargement session', e); setStatus('Erreur chargement session','error'); }
+}
+
+function getAllLignesForSession(sessionId){
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['lignes'],'readonly');
+    const store = tx.objectStore('lignes');
+    const items = [];
+    const req = store.openCursor();
+    req.onsuccess = ev => {
+      const cur = ev.target.result;
+      if(!cur){ resolve(items.filter(i=>i.sessionId===sessionId)); return; }
+      items.push(cur.value); cur.continue();
+    };
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+function putLigneObject(obj){
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['lignes'],'readwrite');
+    tx.objectStore('lignes').put(obj);
+    tx.oncomplete = ()=> resolve(true);
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+
+function auditRecord(rec){
+  try{
+    const tx = sippDB.transaction(['audit'],'readwrite');
+    tx.objectStore('audit').add(rec);
+  }catch(e){ console.warn('Audit failed',e); }
+}
+
+async function persistUpsert(sessionId){
+  if(!sippDB) await openSippDB();
+  const stored = await getAllLignesForSession(sessionId);
+  const map = {};
+  stored.forEach(s=> map[s.key] = s);
+  const incoming = rawLignes || [];
+  let added=0, updated=0, ignored=0;
+  const details = [];
+  for(const line of incoming){
+    const key = sessionId+'::'+line.contrat+'::'+line.type;
+    const existing = map[key];
+    if(existing){
+      // compare fields
+      const changed = {};
+      ['agent','client','statutCRM','statutPaiementBrut','statutPaiementActivation','datePaiementBrut','decommissionne','net'].forEach(f=>{
+        const a = existing[f]===undefined?null:existing[f];
+        const b = line[f]===undefined?null:line[f];
+        if(String(a) !== String(b)) changed[f] = {from:a, to:b};
+      });
+      if(Object.keys(changed).length){
+        const obj = Object.assign({}, line, {sessionId, key});
+        await putLigneObject(obj);
+        updated++;
+        details.push({contract:line.contrat, action:'update', changes:changed});
+        auditRecord({sessionId, entityKey:key, action:'update', user:currentRole||'unknown', agent:currentAgentName||null, timestamp:new Date().toISOString(), before:existing, after:line});
+      } else {
+        ignored++;
+      }
+    } else {
+      const obj = Object.assign({}, line, {sessionId, key});
+      await putLigneObject(obj);
+      added++;
+      details.push({contract:line.contrat, action:'insert'});
+      auditRecord({sessionId, entityKey:key, action:'insert', user:currentRole||'unknown', agent:currentAgentName||null, timestamp:new Date().toISOString(), before:null, after:line});
+    }
+  }
+  // summary
+  const report = {sessionId, generatedAt:new Date().toISOString(), totalAnalyzed:incoming.length, added, updated, ignored, details};
+  return report;
+}
+
+function showImportSessionModal(){ document.getElementById('importSessionModal').style.display='block'; }
+function hideImportSessionModal(e){ document.getElementById('importSessionModal').style.display='none'; }
+function showImportSummaryModal(){ document.getElementById('importSummaryModal').style.display='block'; }
+function hideImportSummaryModal(e){ document.getElementById('importSummaryModal').style.display='none'; }
+
+// Sessions modal handlers
+function showSessionsModal(){
+  const modal = document.getElementById('sessionsModal');
+  modal.style.display='block';
+  loadAndRenderSessions();
+  try{
+    const suppressed = localStorage.getItem('sipp.sessionsHelpDontShow') === 'true';
+    const note = document.getElementById('sessionsHelpNotice');
+    if(note) note.style.display = suppressed ? 'none' : 'block';
+    const dismiss = document.getElementById('dismissSessionsHelpNotice');
+    if(dismiss){ dismiss.onclick = ()=>{ const cb = document.getElementById('sessionsHelpDontShow'); if(cb && cb.checked) localStorage.setItem('sipp.sessionsHelpDontShow','true'); if(note) note.style.display='none'; }; }
+    // set version badge
+    try{ const vb = document.getElementById('appVersionBadge'); if(vb) { vb.textContent = APP_VERSION; vb.style.display='inline-flex'; } }catch(e){console.warn('set version badge failed',e);} 
+  }catch(e){ console.warn('sessions help init failed', e); }
+}
+function hideSessionsModal(e){ document.getElementById('sessionsModal').style.display='none'; }
+
+async function getAllSessions(){
+  await openSippDB();
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['sessions'],'readonly');
+    const store = tx.objectStore('sessions');
+    const out = [];
+    const req = store.openCursor();
+    req.onsuccess = ev => { const cur = ev.target.result; if(!cur){ resolve(out); return; } out.push(cur.value); cur.continue(); };
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function loadAndRenderSessions(){
+  const list = document.getElementById('sessionsList'); list.innerHTML='Chargement...';
+  try{
+    const sess = await getAllSessions();
+    if(!sess.length){ list.innerHTML='<div class="empty">Aucune session trouvée.</div>'; return; }
+    list.innerHTML='';
+    sess.forEach(s=>{
+      const el = document.createElement('div'); el.className='diff-row';
+      el.style.display='flex'; el.style.justifyContent='space-between'; el.style.alignItems='center';
+      const left = document.createElement('div'); left.innerHTML = `<strong>${s.name}</strong><div style="color:var(--ink-dim);font-size:12px">${s.createdAt} · ${s.createdBy}</div>`;
+      const right = document.createElement('div');
+      const useBtn = document.createElement('button'); useBtn.className='btn'; useBtn.textContent='Ouvrir'; useBtn.onclick = async ()=>{ setCurrentSessionId(s.id); setStatus('Session active: '+s.name,'ok'); hideSessionsModal(); };
+      const exportBtn = document.createElement('button'); exportBtn.className='btn'; exportBtn.textContent='Exporter'; exportBtn.onclick = ()=> exportSessionById(s.id);
+      const delBtn = document.createElement('button'); delBtn.className='btn'; delBtn.textContent='Supprimer'; delBtn.onclick = ()=>{ if(confirm('Supprimer la session '+s.name+' ?')) deleteSessionById(s.id).then(()=> loadAndRenderSessions()); };
+      right.appendChild(useBtn); right.appendChild(exportBtn); right.appendChild(delBtn);
+      el.appendChild(left); el.appendChild(right);
+      list.appendChild(el);
+    });
+  }catch(e){ list.innerHTML = '<div class="empty">Erreur chargement sessions</div>'; console.warn(e); }
+}
+
+async function deleteSessionById(id){ await openSippDB(); return new Promise((resolve,reject)=>{ const tx = sippDB.transaction(['sessions','lignes'],'readwrite'); tx.objectStore('sessions').delete(id); // delete lignes by cursor
+  const store = tx.objectStore('lignes'); const req = store.openCursor(); req.onsuccess = ev => { const cur = ev.target.result; if(!cur){ resolve(true); return; } if(cur.value.sessionId===id){ cur.delete(); } cur.continue(); }; req.onerror = ()=> reject(req.error); }); }
+
+async function exportSessionById(id){ await openSippDB(); const sessTx = sippDB.transaction(['sessions'],'readonly'); const sessStore = sessTx.objectStore('sessions'); const getReq = sessStore.get(id); getReq.onsuccess = async ()=>{
+  const meta = getReq.result || {id,name:'session-'+id};
+  // get lignes
+  const lines = await getAllLignesForSession(id);
+  const payload = {meta, lines};
+  const txt = JSON.stringify(payload,null,2);
+  const pass = prompt('Saisir une passphrase pour chiffrer l\'export (laisser vide = non chiffré)');
+  if(pass && pass.trim()){ await encryptAndDownload(txt, pass.trim(), `session_${id}.json.enc`); } else { const blob = new Blob([txt],{type:'application/json'}); const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `session_${id}.json`; a.click(); }
+ };
+}
+
+async function importSessionJSON(file){
+  let txt = await file.text();
+  try{
+    // robust repair pipeline (mandatory)
+    function tryParse(s){ try{ return JSON.parse(s); }catch(e){ return null; } }
+    let payload = tryParse(txt);
+    if(!payload){
+      appendDiagnostic('warn','JSON invalide','Lancement pipeline de réparation');
+      // 1) remove BOM and non-printable prefix/suffix
+      let s = txt.replace(/^\uFEFF/, '').trim();
+      s = s.replace(/^[^\{\[]+/, ''); s = s.replace(/[^\}\]]+$/, '');
+      payload = tryParse(s);
+      if(payload){ txt = s; appendDiagnostic('info','Réparation 1 réussie','Trim BOM/prefix/suffix'); }
+    }
+    if(!payload){
+      // 2) replace smart quotes and backticks
+      let s2 = txt.replace(/[\u2018\u2019\u201C\u201D\u201A\u201B\u2032\u2033]/g,'"').replace(/`/g,'"');
+      payload = tryParse(s2);
+      if(payload){ txt = s2; appendDiagnostic('info','Réparation 2 réussie','Normalisation des guillemets'); }
+    }
+    if(!payload){
+      // 3) replace single quotes with double quotes (naïf)
+      let s3 = txt.replace(/'(?=[^:]+:)/g,'"').replace(/:(\s*)'([^']*)'(?=[,}\]])/g, ':"$2"').replace(/'([^']*)'/g,'"$1"');
+      payload = tryParse(s3);
+      if(payload){ txt = s3; appendDiagnostic('info','Réparation 3 réussie','Remplacement des apostrophes'); }
+    }
+    if(!payload){
+      // 4) remove trailing commas
+      let s4 = txt.replace(/,\s*([}\]])/g, '$1');
+      payload = tryParse(s4);
+      if(payload){ txt = s4; appendDiagnostic('info','Réparation 4 réussie','Suppression des virgules finales'); }
+    }
+    if(!payload){
+      // 5) quote unquoted keys (simple heuristic)
+      let s5 = txt.replace(/([,{]\s*)([A-Za-z0-9_\-]+)\s*:/g, '$1"$2":');
+      payload = tryParse(s5);
+      if(payload){ txt = s5; appendDiagnostic('info','Réparation 5 réussie','Quotation des clefs non-quotées'); }
+    }
+    if(!payload){
+      appendDiagnostic('error','JSON irréparable','Aucune heuristique n\'a abouti — génération d\'une session vide');
+      payload = { meta:{ id:'sess-import-'+Date.now(), name:'Imported (repaired-empty) '+new Date().toLocaleString(), createdAt:new Date().toISOString(), createdBy: currentRole||'import-auto' }, lines:[] };
+    }
+
+    // payload now exists (either repaired or generated)
+    await openSippDB();
+    if(!payload.meta){ appendDiagnostic('warn','Meta manquante après réparation','Génération automatique de meta'); payload.meta = { id:'sess-import-'+Date.now(), name:'Imported session '+new Date().toLocaleString(), createdAt:new Date().toISOString(), createdBy: currentRole||'import-auto' }; }
+    const meta = payload.meta;
+    const id = meta.id || ('sess-import-'+Date.now());
+    return new Promise((resolve,reject)=>{
+      const tx = sippDB.transaction(['sessions','lignes'],'readwrite');
+      tx.objectStore('sessions').put(Object.assign({},meta,{id}));
+      const store = tx.objectStore('lignes');
+      (payload.lines||[]).forEach(l=>{ l.sessionId = id; l.key = id+'::'+(l.contrat||'')+'::'+(l.type||''); store.put(l); });
+      tx.oncomplete = async ()=>{ appendDiagnostic('success','Import terminé','Session: '+(meta.name||id)); setCurrentSessionId(id); setStatus('Session importée: '+(meta.name||id),'ok'); loadAndRenderSessions();
+        try{
+          if(localStorage.getItem('sipp.autoRunTests')==='true'){
+            appendDiagnostic('info','Auto-run','Démarrage des tests après import');
+            const res = await runImportTestSuite();
+            appendDiagnostic('info','Resultats tests après import', JSON.stringify(res.summary||res).slice(0,1000));
+          }
+        }catch(err){ appendDiagnostic('error','Erreur auto-run tests', String(err)); }
+        resolve(id);
+      };
+      tx.onerror = ()=>{ appendDiagnostic('error','Échec import DB', String(tx.error)); reject(tx.error); };
+    });
+  }catch(e){ appendDiagnostic('error','Import invalide', String(e)); alert('Import invalide: '+e.message); return null; }
+}
+
+  // Additional heuristic: escape newlines and strip control chars (applied earlier in pipeline)
+  // RunImportTestSuite: programmatic re-run of the import test scenarios (used by diagnostics button)
+  async function runImportTestSuite(){
+    const results = {summary:[], details:[]};
+    // cleanup
+    await openSippDB(); const old = await getAllSessions(); if(Array.isArray(old)){ for(const s of old){ try{ await deleteSessionById(s.id); }catch(e){} } }
+    // helper to programmatically trigger file inputs
+    async function setFileInput(selector, content, name){ const el = document.querySelector(selector); const f = new File([content], name, {type:'application/json'}); const dt = new DataTransfer(); dt.items.add(f); el.files = dt.files; el.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,500)); }
+
+    // 1: plain
+    const payload1 = JSON.stringify({ meta:{ id:'t1-'+Date.now(), name:'Test Plain', createdAt:new Date().toISOString(), createdBy:'tester'}, lines:[{contrat:'00001', type:'MINT', agent:'Alice', brut:100}] });
+    await setFileInput('#importSessionFile', payload1, 'session_plain.json'); results.summary.push('plain');
+    // 2: missing meta
+    const payload2 = JSON.stringify({ lines:[{contrat:'00002', type:'MINT'}] });
+    await setFileInput('#importSessionFile', payload2, 'missing_meta.json'); results.summary.push('missing_meta');
+    // 3: malformed
+    const bad = "{ not: json, 'a':1 }";
+    await setFileInput('#importSessionFile', bad, 'bad.json'); results.summary.push('malformed');
+    // 4: encrypted valid
+    const pass = 's3cr3t!'; const plainPayload = JSON.stringify({ meta:{ id:'tenc-'+Date.now(), name:'Test Enc', createdAt:new Date().toISOString(), createdBy:'tester'}, lines:[{contrat:'E0001', type:'MINT', agent:'Bob', brut:200}] });
+    const salt = (Math.random()+''+Date.now()).slice(2,12); const iv = crypto.getRandomValues(new Uint8Array(12)); const key = await deriveKeyFromPass(pass, salt); const ctBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, new TextEncoder().encode(plainPayload)); const ctB64 = btoa(String.fromCharCode(...new Uint8Array(ctBuf))); const encPayload = JSON.stringify({ salt: salt, iv: Array.from(iv), ct: ctB64 });
+    window._promptResponses = [pass]; await setFileInput('#importSessionFile', encPayload, 'session_enc.json'); results.summary.push('enc_valid');
+    // return summary of sessions
+    const final = await getAllSessions(); results.details = final.map(s=>({id:s.id,name:s.name})); return results;
+  }
+
+// simple encryption POC using WebCrypto
+async function deriveKeyFromPass(pass, salt){ const enc = new TextEncoder(); const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pass), {name:'PBKDF2'}, false, ['deriveKey']); return crypto.subtle.deriveKey({name:'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash:'SHA-256'}, keyMaterial, {name:'AES-GCM', length:256}, true, ['encrypt','decrypt']); }
+
+async function encryptAndDownload(plaintext, pass, filename){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const salt = (Math.random()+''+Date.now()).slice(2,12);
+  const key = await deriveKeyFromPass(pass, salt);
+  const enc = new TextEncoder();
+  const ctBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, enc.encode(plaintext));
+  const ctArr = new Uint8Array(ctBuf);
+  const ctB64 = btoa(String.fromCharCode(...ctArr));
+  const payload = { salt, iv: Array.from(iv), ct: ctB64 };
+  const blob = new Blob([JSON.stringify(payload)],{type:'application/json'});
+  const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+}
+
+
 /* ============================= MOTEUR DE CALCUL ============================= */
-function buildLignes(bodyA, cA, refMap, hasCRM){
+function parsePaymentFlag(val){
+  if(val===null||val===undefined) return false;
+  const s = norm(val);
+  if(!s) return false;
+  // BUG CRITIQUE CORRIGÉ : toute négation explicite l'emporte TOUJOURS, quelle que soit la
+  // formulation — l'ancienne version testait juste si la chaîne contenait "pay", ce qui faisait
+  // matcher "Non Payé" (car "non paye" contient "paye" qui contient "pay") et classait à tort
+  // des ventes NON payées comme payées, avec le risque de double paiement / blocage comptable.
+  if(/(^|[\s_-])(non|no|pas|impaye|impayee|false)([\s_-]|$)/.test(s) || /non[\s_-]?paye/.test(s) || /pas[\s_-]?paye/.test(s)) return false;
+  if(s==='0' || s==='en attente' || s==='a payer' || s==='attente') return false;
+  return /^(oui|yes|paye|payee|paid|true|1|regle|reglee|verse|versee)$/.test(s) || /\bpaye(e)?\b/.test(s);
+}
+function mergeStringField(existing, candidate){
+  if(!existing) return candidate || '';
+  if(!candidate) return existing;
+  if(existing === candidate) return existing;
+  if(existing.includes(candidate)) return existing;
+  if(candidate.includes(existing)) return candidate;
+  return `${existing} / ${candidate}`;
+}
+function buildLignes(aSources, statusMap, hasCRM){
   rawLignes = [];
   const today = new Date();
-  let seq = 0;
+  const refSeen = {};
+  const mintGroups = {};
+  const consoGroups = {};
 
-  bodyA.forEach(row=>{
-    if(!row) return;
-    const dateVenteRaw = row[cA.dateVente];
-    if(dateVenteRaw===null || dateVenteRaw===undefined || String(dateVenteRaw).trim()==='') return;
-    const dateVente = parseDate(dateVenteRaw);
-    const agent = (row[cA.commercial]||'').toString().trim() || '(agent non renseigné)';
-    const client = [row[cA.nomClient], row[cA.prenomClient]].filter(Boolean).join(' ').trim();
-    const produit = cA.produit!==-1 ? row[cA.produit] : '';
+  aSources.forEach(src=>{
+    const cA = {
+      dateVente: colIndexByNames(src.header, ['Date de Vente']),
+      typeContrat: colIndexByNames(src.header, ['Type de Contrat']),
+      produit: colIndexByNames(src.header, ['Produit Vendu']),
+      contratEnergie: colIndexByNames(src.header, ['Numéro Contrat Energie','Numero Contrat Energie','Numero contrat Energie']),
+      nomClient: colIndexByNames(src.header, ['Nom du Client']),
+      prenomClient: colIndexByNames(src.header, ['Prénom du Client','Prenom du Client']),
+      commercial: colIndexByNames(src.header, ['Nom du Commercial','Nom du commercial']),
+      contratConso: colIndexByNames(src.header, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote','Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote']),
+      statutVente: colIndexByNames(src.header, ['statut de vente','Statut de vente','statut','STATUT']),
+      payeBrut: colIndexByNames(src.header, ['paye brut','payé brut','paye brut','brut paye'])
+    };
 
-    // --- MINT ---
-    const contracts = extractContractNumbers(row[cA.contratEnergie]);
-    contracts.forEach(ref=>{
-      seq++;
-      const info = refMap[ref];
-      const etatRaw = info ? info.etat : null;
-      const etatN = norm(etatRaw);
-      const found = !!info;
-      const isActivated = etatN.startsWith('activ');
-      const isChute = STATUTS_CHUTE.some(s => etatN.startsWith(s));
-      const isPending = !found || etatN.startsWith('introuvable') || etatN.startsWith('en attente');
+    src.rows.forEach(row=>{
+      if(!row) return;
+      const dateVenteRaw = row[cA.dateVente];
+      if(dateVenteRaw===null || dateVenteRaw===undefined || String(dateVenteRaw).trim()==='') return;
+      const dateVente = parseDate(dateVenteRaw);
+      const agent = (row[cA.commercial]||'').toString().trim() || '(agent non renseigné)';
+      const client = [row[cA.nomClient], row[cA.prenomClient]].filter(Boolean).join(' ').trim();
+      const produit = cA.produit!==-1 ? row[cA.produit] : '';
+      const statutVente = cA.statutVente!==-1 ? row[cA.statutVente] : null;
+      const payeBrut = cA.payeBrut!==-1 ? row[cA.payeBrut] : null;
+      const sources = [`${src.fileName}:${src.sheetName}`];
 
-      const moisEcoules = monthsBetween(dateVente, today);
-      const withinClawbackWindow = moisEcoules !== null && moisEcoules <= 3;
-
-      const brut = 50;
-      const activation = isActivated ? 150 : 0;
-      const autoClawback = isChute && withinClawbackWindow;
-
-      const lineId = 'MINT-'+ref+'-'+seq;
-      const manualOverride = overrides[lineId] || {};
-      const decommissionManuel = !!manualOverride.decommissionManuel;
-      const decommissionne = autoClawback || decommissionManuel;
-
-      const net = decommissionne ? 0 : (brut + activation);
-      const vendrediPaiement = nextFriday(dateVente);
-
-      rawLignes.push({
-        id: lineId, type:'MINT', agent, dateVente, dateVenteStr: fmtDate(dateVente),
-        vendrediPaiement, vendrediPaiementStr: fmtDate(vendrediPaiement),
-        contrat: ref, client, produit,
-        statutCRM: found ? (etatRaw||'—') : 'Introuvable (CRM)',
-        brut, activation, net,
-        decommissionAuto: autoClawback, decommissionManuel,
-        decommissionne,
-        statutPaiementBrut: manualOverride.statutPaiementBrut || 'Non Payé',
-        statutPaiementActivation: manualOverride.statutPaiementActivation || 'Non Payé',
-        datePaiementBrut: manualOverride.datePaiementBrut || null,
-        pending: isPending,
-        moisEcoules
+      // --- MINT ---
+      const contracts = extractContractNumbers(row[cA.contratEnergie]);
+      contracts.forEach(originalRef=>{
+        const ref = normalizeRef(originalRef);
+        if(!ref) return;
+        const existing = mintGroups[ref] || {
+          ref, agent:'', client:'', produit:'', dateVente:null,
+          statutVente:null, payeBrut:null, sources:[]
+        };
+        existing.agent = mergeStringField(existing.agent, agent);
+        existing.client = mergeStringField(existing.client, client);
+        existing.produit = mergeStringField(existing.produit, produit);
+        existing.dateVente = (!existing.dateVente || (dateVente && dateVente < existing.dateVente)) ? dateVente : existing.dateVente;
+        existing.statutVente = mergeStringField(existing.statutVente, statutVente);
+        if(payeBrut && !existing.payeBrut) existing.payeBrut = payeBrut;
+        existing.sources = Array.from(new Set(existing.sources.concat(sources)));
+        mintGroups[ref] = existing;
       });
+
+      // --- CONSO ---
+      if(cA.contratConso!==-1 && !isEmptyConso(row[cA.contratConso])){
+        const refConso = normalizeRef(row[cA.contratConso]);
+        if(refConso){
+          const existing = consoGroups[refConso] || {
+            ref: refConso, agent:'', client:'', dateVente:null, sources:[]
+          };
+          existing.agent = mergeStringField(existing.agent, agent);
+          existing.client = mergeStringField(existing.client, client);
+          existing.dateVente = (!existing.dateVente || (dateVente && dateVente < existing.dateVente)) ? dateVente : existing.dateVente;
+          existing.sources = Array.from(new Set(existing.sources.concat(sources)));
+          consoGroups[refConso] = existing;
+        }
+      }
     });
+  });
 
-    // --- CONSOPILOTE ---
-    if(cA.contratConso!==-1 && !isEmptyConso(row[cA.contratConso])){
-      seq++;
-      const ref = String(row[cA.contratConso]).trim();
-      const moisEcoules = monthsBetween(dateVente, today);
-      const signature = 100;
-      const m1 = (moisEcoules!==null && moisEcoules>=1) ? 50 : 0;
-      const m2 = (moisEcoules!==null && moisEcoules>=2) ? 50 : 0;
-      const net = signature + m1 + m2;
+  function stableId(prefix, ref){
+    refSeen[prefix+ref] = (refSeen[prefix+ref]||0) + 1;
+    const n = refSeen[prefix+ref];
+    return n===1 ? (prefix+'-'+ref) : (prefix+'-'+ref+'-dup'+n);
+  }
 
-      const lineId = 'CONSO-'+ref+'-'+seq;
-      const manualOverride = overrides[lineId] || {};
+  Object.values(mintGroups).forEach(item=>{
+    if(!item.dateVente) return;
+    const etatRaw = statusMap[item.ref]?.etat || item.statutVente || 'Introuvable (CRM)';
+    const etatN = norm(etatRaw);
+    const found = !!statusMap[item.ref];
+    const isActivated = /activ/.test(etatN);
+    const isChute = /annul|resil|retract|refus/.test(etatN);
+    const isPending = !found || /^introuvable|^en attente/.test(etatN);
+    const moisEcoules = monthsBetween(item.dateVente, today);
+    const withinClawbackWindow = moisEcoules !== null && moisEcoules <= 3;
+    const brut = 50;
+    const activation = isActivated ? 150 : 0;
+    const payeBrutPaid = parsePaymentFlag(item.payeBrut);
 
-      rawLignes.push({
-        id: lineId, type:'CONSO', agent, dateVente, dateVenteStr: fmtDate(dateVente),
-        contrat: ref, client, produit: 'ConsoPilote',
-        signature, m1, m2, net,
-        m1Echu: moisEcoules!==null && moisEcoules>=1,
-        m2Echu: moisEcoules!==null && moisEcoules>=2,
-        statutPaiement: manualOverride.statutPaiement || 'Non Payé',
-        moisEcoules
-      });
-    }
+    const lineId = stableId('MINT', item.ref);
+    const manualOverride = overrides[lineId] || {};
+    const decommissionManuel = !!manualOverride.decommissionManuel;
+    const wasBrutPaid = manualOverride.statutPaiementBrut === 'Payé' || payeBrutPaid;
+    const wasActivPaid = manualOverride.statutPaiementActivation === 'Payé';
+    const autoClawback = isChute && withinClawbackWindow && !wasBrutPaid && !wasActivPaid;
+    const needsQualityReview = isChute && (wasBrutPaid || wasActivPaid) && !decommissionManuel;
+    const decommissionne = autoClawback || decommissionManuel;
+    const net = decommissionne ? 0 : (brut + activation);
+    const vendrediPaiement = nextFriday(item.dateVente);
+
+    rawLignes.push({
+      id: lineId, type:'MINT', agent:item.agent || '(agent non renseigné)', dateVente:item.dateVente, dateVenteStr: fmtDate(item.dateVente),
+      vendrediPaiement, vendrediPaiementStr: fmtDate(vendrediPaiement),
+      contrat:item.ref, client:item.client, produit:item.produit || 'MINT',
+      statutCRM: found ? (etatRaw||'—') : (item.statutVente || 'Introuvable (CRM)'),
+      brut, activation, net,
+      decommissionAuto: autoClawback, decommissionManuel,
+      decommissionne, needsQualityReview,
+      statutPaiementBrut: manualOverride.statutPaiementBrut || (payeBrutPaid ? 'Payé' : 'Non Payé'),
+      statutPaiementActivation: manualOverride.statutPaiementActivation || 'Non Payé',
+      datePaiementBrut: manualOverride.datePaiementBrut || null,
+      motifQualite: manualOverride.motifQualite || '',
+      pending: isPending,
+      moisEcoules,
+      sourceInfo: item.sources.join(' ; ')
+    });
+  });
+
+  Object.values(consoGroups).forEach(item=>{
+    if(!item.dateVente) return;
+    const moisEcoules = monthsBetween(item.dateVente, today);
+    const signature = 100;
+    const m1 = (moisEcoules!==null && moisEcoules>=1) ? 50 : 0;
+    const m2 = (moisEcoules!==null && moisEcoules>=2) ? 50 : 0;
+    const net = signature + m1 + m2;
+    const lineId = stableId('CONSO', item.ref);
+    const manualOverride = overrides[lineId] || {};
+    rawLignes.push({
+      id: lineId, type:'CONSO', agent:item.agent || '(agent non renseigné)', dateVente:item.dateVente, dateVenteStr: fmtDate(item.dateVente),
+      contrat:item.ref, client:item.client, produit: 'ConsoPilote',
+      signature, m1, m2, net,
+      m1Echu: moisEcoules!==null && moisEcoules>=1,
+      m2Echu: moisEcoules!==null && moisEcoules>=2,
+      statutPaiement: manualOverride.statutPaiement || 'Non Payé',
+      moisEcoules,
+      sourceInfo: item.sources.join(' ; ')
+    });
   });
 }
 
@@ -745,14 +1678,19 @@ function renderSuivi(){
 function renderFinance(){
   const data = rawLignes.map(l=>{
     if(l.type==='MINT'){
+      const wasBrutPaid = l.statutPaiementBrut==='Payé';
       return {
         id:l.id, Type:'MINT', Agent:l.agent, Date:l.dateVenteStr, Vendredi:l.vendrediPaiementStr,
         Contrat:l.contrat,
-        Brut:l.brut, Statut_Brut: l.decommissionne ? '—' : l.statutPaiementBrut,
-        Date_Paiement: l.decommissionne ? '' : (l.datePaiementBrut||''),
+        Brut:l.brut,
+        Statut_Brut: l.decommissionne ? (wasBrutPaid ? 'Payé — annulé qualité' : '—') : l.statutPaiementBrut,
+        Date_Paiement: l.datePaiementBrut || '',
         Avance: isAvance(l),
-        Activation:l.activation, Statut_Activation: (l.activation===0 || l.decommissionne) ? '—' : l.statutPaiementActivation,
-        Decom_manuel:l.decommissionManuel, Net:l.net
+        Activation:l.activation,
+        Statut_Activation: l.activation===0 ? '—' : (l.decommissionne ? (l.statutPaiementActivation==='Payé' ? 'Payé — annulé qualité' : '—') : l.statutPaiementActivation),
+        Decom_manuel:l.decommissionManuel,
+        Revue_Qualite: l.needsQualityReview,
+        Net:l.net
       };
     }
     return {
@@ -760,7 +1698,7 @@ function renderFinance(){
       Contrat:l.contrat,
       Brut:l.signature, Statut_Brut:l.statutPaiement, Date_Paiement:'', Avance:false,
       Activation:l.m1+l.m2, Statut_Activation:'—',
-      Decom_manuel:false, Net:l.net
+      Decom_manuel:false, Revue_Qualite:false, Net:l.net
     };
   });
 
@@ -774,12 +1712,13 @@ function renderFinance(){
       {title:"Vendredi de paie", field:"Vendredi", width:110},
       {title:"Contrat", field:"Contrat", width:100},
       {title:"Brut (DH)", field:"Brut", width:80, hozAlign:"right"},
-      {title:"Statut Brut", field:"Statut_Brut", width:120,
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—',
+      {title:"Statut Brut", field:"Statut_Brut", width:150,
+        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—' && !cell.getValue().startsWith('Payé — annulé'),
         editorParams:{values:["Non Payé","Payé"]},
         formatter:c=>{
           const v=c.getValue();
           if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
+          if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
           return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
         },
         cellEdited:cell=>{
@@ -811,12 +1750,13 @@ function renderFinance(){
         }
       },
       {title:"Activation (DH)", field:"Activation", width:100, hozAlign:"right"},
-      {title:"Statut Activation", field:"Statut_Activation", width:130,
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—',
+      {title:"Statut Activation", field:"Statut_Activation", width:150,
+        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—' && !cell.getValue().startsWith('Payé — annulé'),
         editorParams:{values:["Non Payé","Payé"]},
         formatter:c=>{
           const v=c.getValue();
           if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
+          if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
           return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
         },
         cellEdited:cell=>{
@@ -833,6 +1773,7 @@ function renderFinance(){
           recomputeAndRerender();
         }
       },
+      {title:"⚠ Revue Qualité", field:"Revue_Qualite", width:130, formatter:c=>c.getValue() ? '<span class="tag warn">À statuer</span>' : ''},
       {title:"Net (DH)", field:"Net", width:90, hozAlign:"right",
         formatter:c=>`<b style="color:${c.getValue()>0?'#3fd6a4':'#8ea0bd'}">${c.getValue()} DH</b>`}
     ]
@@ -991,10 +1932,13 @@ function renderKPI(){
 }
 
 function renderAlertes(){
-  const data = rawLignes.filter(l=>l.type==='MINT' && (l.pending || (l.moisEcoules!==null && l.moisEcoules>=2 && l.moisEcoules<=3 && !l.decommissionne))).map(l=>({
+  const data = rawLignes.filter(l=>l.type==='MINT' && (l.needsQualityReview || l.pending || (l.moisEcoules!==null && l.moisEcoules>=2 && l.moisEcoules<=3 && !l.decommissionne))).map(l=>({
     Agent:l.agent, Contrat:l.contrat, Date:l.dateVenteStr, Statut_CRM:l.statutCRM,
-    Alerte: l.pending ? 'Non rapproché avec le CRM' : `Échéance clawback dans ${3-l.moisEcoules} mois`
-  }));
+    Alerte: l.needsQualityReview ? 'Annulation CRM après paiement — décision Qualité requise'
+          : l.pending ? 'Non rapproché avec le CRM'
+          : `Échéance clawback dans ${3-l.moisEcoules} mois`,
+    _priorite: l.needsQualityReview ? 0 : (l.pending ? 1 : 2)
+  })).sort((a,b)=>a._priorite-b._priorite);
   if(tAlertes) tAlertes.destroy();
   tAlertes = new Tabulator("#table-alertes", {
     data, layout:"fitDataStretch", height:"320px", placeholder:"Aucune alerte active.",
@@ -1003,7 +1947,10 @@ function renderAlertes(){
       {title:"Contrat", field:"Contrat", width:120},
       {title:"Date vente", field:"Date", width:110},
       {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
-      {title:"Alerte", field:"Alerte", widthGrow:2, formatter:c=>`<span class="tag warn">${c.getValue()}</span>`}
+      {title:"Alerte", field:"Alerte", widthGrow:2, formatter:c=>{
+        const cls = c.getValue().includes('Qualité requise') ? 'bad' : 'warn';
+        return `<span class="tag ${cls}">${c.getValue()}</span>`;
+      }}
     ]
   });
 }
@@ -1029,14 +1976,18 @@ function renderQualite(){
       id:l.id, Agent:l.agent, Date:l.dateVenteStr, Contrat:l.contrat,
       Client:l.client, Statut_CRM:l.statutCRM,
       Decommission_Auto: l.decommissionAuto,
+      Revue_Necessaire: l.needsQualityReview,
       Annulation_Qualite: !!o.decommissionManuel,
       Motif: o.motifQualite || ''
     };
-  });
+  }).sort((a,b)=>(b.Revue_Necessaire?1:0)-(a.Revue_Necessaire?1:0));
 
   if(tQualite) tQualite.destroy();
   tQualite = new Tabulator("#table-qualite", {
     data, layout:"fitDataStretch", height:"460px", placeholder:"Aucune donnée — importez un fichier.",
+    rowFormatter:row=>{
+      if(row.getData().Revue_Necessaire) row.getElement().style.boxShadow = 'inset 3px 0 0 var(--red)';
+    },
     columns:[
       {title:"Agent", field:"Agent", widthGrow:2},
       {title:"Date vente", field:"Date", width:100},
@@ -1044,6 +1995,8 @@ function renderQualite(){
       {title:"Client", field:"Client", widthGrow:2},
       {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
       {title:"Décomm. auto (clawback <3 mois)", field:"Decommission_Auto", width:150, formatter:"tickCross"},
+      {title:"⚠ Revue requise", field:"Revue_Necessaire", width:130,
+        formatter:c=>c.getValue() ? '<span class="tag bad">Annulé CRM après paiement</span>' : ''},
       {title:"Annulation Qualité", field:"Annulation_Qualite", width:140, formatter:"tickCross",
         editor:"tickCross", editable:()=>canEditQuality(),
         cellEdited:cell=>{
@@ -1071,6 +2024,7 @@ function renderQualite(){
     if(a) tQualite.addFilter("Agent","=",a);
     if(s==='actif') tQualite.addFilter("Annulation_Qualite","=",false);
     if(s==='annule_qualite') tQualite.addFilter("Annulation_Qualite","=",true);
+    if(s==='revue') tQualite.addFilter("Revue_Necessaire","=",true);
   };
 }
 
@@ -1351,7 +2305,168 @@ document.getElementById('exportFinanceBtn').addEventListener('click', ()=>{
   XLSX.utils.book_append_sheet(wb, ws, "Tresorerie");
   XLSX.writeFile(wb, 'tresorerie_'+new Date().toISOString().slice(0,10)+'.xlsx');
 });
+
+// Bouton de comparaison attendu vs état courant (utilise compare_expected.js)
+document.getElementById('compareExpectedBtn').addEventListener('click', async ()=>{
+  try{
+    setStatus('Lancement de la comparaison…');
+    if(typeof window.compareWithExpected !== 'function'){
+      showError('Script de comparaison introuvable. Vérifiez que `compare_expected.js` est présent.');
+      setStatus('Comparaison impossible', 'error');
+      return;
+    }
+    const res = await window.compareWithExpected();
+    if(res){
+      setStatus(`Comparaison terminée : ${res.matches}/${res.total} correspondances.`, 'ok');
+      showCompareModal(res);
+    }
+  }catch(err){
+    showError('Erreur lors de la comparaison : '+(err.message||err));
+    setStatus('Erreur comparaison', 'error');
+  }
+});
+
+function showCompareModal(res){
+  const modal = document.getElementById('compareModal');
+  const sum = document.getElementById('compareSummary');
+  const list = document.getElementById('compareList');
+  sum.textContent = `${res.matches} correspondances sur ${res.total} — généré le ${new Date(res.generatedAt||Date.now()).toLocaleString()}`;
+  list.innerHTML = '';
+  res.details.forEach(d=>{
+    const el = document.createElement('div');
+    el.className = 'diff-row ' + (d.match ? 'match' : 'nomatch');
+    el.innerHTML = `<strong>${d.contract}</strong> — attendu: <b style="color:var(--amber)">${d.expected}</b> — réel: <b style="color:var(--mint)">${d.actual}</b>`;
+    list.appendChild(el);
+  });
+  document.getElementById('downloadCompareBtn').onclick = ()=>{
+    const blob = new Blob([JSON.stringify(res,null,2)], {type:'application/json'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'compare_expected_report_'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+  };
+  modal.style.display = 'block';
+  // hook buttons
+  const filterBtn = document.getElementById('filterNonMatchesBtn');
+  let filtered = false;
+  filterBtn.onclick = ()=>{
+    filtered = !filtered;
+    filterBtn.textContent = filtered ? 'Afficher tout' : 'Afficher non-correspondances';
+    Array.from(list.children).forEach(el=>{
+      if(filtered && el.classList.contains('match')) el.style.display='none'; else el.style.display='block';
+    });
+  };
+  document.getElementById('runRulesBtn').onclick = async ()=>{
+    setStatus('Vérification règles métier…');
+    try{
+      if(typeof window.validateBusinessRules !== 'function'){
+        showError('Script de validation introuvable.'); setStatus('Erreur validation','error'); return;
+      }
+      const report = await window.validateBusinessRules();
+      if(report && report.totalIssues>0){
+        // afficher dans la modale
+        const issuesContainer = document.createElement('div');
+        issuesContainer.style.marginTop='10px';
+        issuesContainer.innerHTML = `<h4 style="margin:6px 0">Règles métier — anomalies détectées : ${report.totalIssues}</h4>`;
+        report.issues.forEach(it=>{
+          const e = document.createElement('div'); e.className='diff-row nomatch'; e.textContent = `${it.contract} — ${it.issue}`; issuesContainer.appendChild(e);
+        });
+        list.insertBefore(issuesContainer, list.firstChild);
+        setStatus(`Validation terminée — ${report.totalIssues} anomalies.`, 'warn');
+      } else {
+        setStatus('Validation terminée — aucune anomalie détectée.', 'ok');
+        const okNote = document.createElement('div'); okNote.className='diff-row match'; okNote.textContent='Aucune anomalie métier détectée.'; list.insertBefore(okNote, list.firstChild);
+      }
+    }catch(err){ showError('Erreur validation : '+err.message); setStatus('Erreur validation','error'); }
+  };
+  // auto-correction orthographique des agents
+  const previewBtn = document.getElementById('previewCorrectionsBtn');
+  previewBtn.onclick = async ()=>{
+    setStatus('Prévisualisation des corrections…');
+    try{
+      if(typeof window.suggestAgentCorrections !== 'function'){
+        showError('Fonction de suggestion introuvable. Vérifiez que le script de comparaison est chargé.'); setStatus('Erreur suggestion','error'); return;
+      }
+      const res = await window.suggestAgentCorrections();
+      // show suggestions at top of modal
+      const suggestionContainer = document.createElement('div');
+      suggestionContainer.style.margin = '8px 0';
+      suggestionContainer.innerHTML = `<h4 style="margin:6px 0">Suggestions (${res.suggestions.length})</h4>`;
+      res.suggestions.slice(0,200).forEach(s=>{
+        const e = document.createElement('div'); e.className='diff-row nomatch';
+        e.textContent = `${s.contract} — ${s.from} → ${s.to===null? '[nouveau]' : s.to}`; suggestionContainer.appendChild(e);
+      });
+      list.insertBefore(suggestionContainer, list.firstChild);
+      setStatus(`Prévisualisation prête — ${res.suggestions.length} suggestion(s).`, res.suggestions.length? 'warn':'ok');
+    }catch(err){ showError('Erreur prévisualisation : '+(err.message||err)); setStatus('Erreur suggestion','error'); }
+  };
+
+  const autoBtn = document.getElementById('autoCorrectAgentsBtn');
+  autoBtn.onclick = async ()=>{
+    setStatus('Application des corrections orthographiques des agents…');
+    try{
+      if(typeof window.applyAgentOrthographyCorrection !== 'function'){
+        showError('Fonction de correction introuvable. Vérifiez que le script de comparaison est chargé.'); setStatus('Erreur correction','error'); return;
+      }
+      const resCorr = await window.applyAgentOrthographyCorrection({apply:true});
+      // if there are unmapped suggestions (to==null), open mapping modal for user input
+      setStatus(`${resCorr.applied} correction(s) appliquée(s). Suggestions totales: ${resCorr.suggestions.length}.`, resCorr.applied? 'ok' : 'warn');
+      const unmapped = (resCorr.suggestions||[]).filter(s=>!s.to).map(s=>s.from).filter((v,i,a)=>a.indexOf(v)===i);
+      if(unmapped.length){
+        showAgentMappingModal(unmapped);
+        return;
+      }
+      if(typeof window.renderAll === 'function') window.renderAll();
+      try{
+        const newRes = await window.compareWithExpected();
+        sum.textContent = `${newRes.matches} correspondances sur ${newRes.total} — généré le ${new Date(newRes.generatedAt||Date.now()).toLocaleString()}`;
+        list.innerHTML = '';
+        newRes.details.forEach(d=>{
+          const el = document.createElement('div');
+          el.className = 'diff-row ' + (d.match ? 'match' : 'nomatch');
+          el.innerHTML = `<strong>${d.contract}</strong> — attendu: <b style="color:var(--amber)">${d.expected}</b> — réel: <b style="color:var(--mint)">${d.actual}</b>`;
+          list.appendChild(el);
+        });
+      }catch(e){ console.warn('Impossible de rerun compare après correction',e); }
+    }catch(err){ showError('Erreur lors de la correction : '+(err.message||err)); setStatus('Erreur correction','error'); }
+  };
+
+function showAgentMappingModal(unmappedArray){
+  const modal = document.getElementById('agentMappingModal');
+  const list = document.getElementById('agentMappingList'); list.innerHTML = '';
+  const map = loadCanonicalMap();
+  unmappedArray.forEach(u=>{
+    const row = document.createElement('div'); row.className='diff-row nomatch';
+    const input = document.createElement('input'); input.type='text'; input.value = map[u] || u; input.style.width='70%'; input.style.marginRight='8px';
+    const span = document.createElement('span'); span.textContent = u; span.style.marginRight='8px'; span.style.color='var(--ink-dim)';
+    row.appendChild(span); row.appendChild(input);
+    list.appendChild(row);
+  });
+  document.getElementById('applyAgentMappingsBtn').onclick = async ()=>{
+    const rows = Array.from(list.children);
+    const newMap = loadCanonicalMap();
+    rows.forEach(r=>{
+      const parts = r.querySelectorAll('span,input');
+      if(parts.length>=2){ const orig = parts[0].textContent; const val = parts[1].value.trim(); if(val && val!==orig) newMap[orig]=val; }
+    });
+    saveCanonicalMap(newMap);
+    // apply to rawLignes
+    const applied = [];
+    (window.rawLignes||[]).forEach(l=>{ if(newMap[l.agent]){ l.agent = newMap[l.agent]; applied.push(l.contrat); } });
+    if(typeof window.renderAll === 'function') window.renderAll();
+    hideAgentMappingModal();
+    setStatus(`Mappings appliqués : ${applied.length}`, applied.length? 'ok':'warn');
+    try{ const newRes = await window.compareWithExpected(); /* refresh compare modal if open */ const cmpModal = document.getElementById('compareModal'); if(cmpModal.style.display==='block'){ const sumEl = document.getElementById('compareSummary'); const listEl = document.getElementById('compareList'); sumEl.textContent = `${newRes.matches} correspondances sur ${newRes.total} — généré le ${new Date(newRes.generatedAt||Date.now()).toLocaleString()}`; listEl.innerHTML=''; newRes.details.forEach(d=>{ const el=document.createElement('div'); el.className='diff-row '+(d.match?'match':'nomatch'); el.innerHTML = `<strong>${d.contract}</strong> — attendu: <b style="color:var(--amber)">${d.expected}</b> — réel: <b style="color:var(--mint)">${d.actual}</b>`; listEl.appendChild(el); }); }
+    }catch(e){ console.warn('Erreur rafraîchissement compare:',e); }
+  };
+  modal.style.display='block';
+}
+function hideAgentMappingModal(e){ document.getElementById('agentMappingModal').style.display='none'; }
+}
+
+function hideCompareModal(e){
+  const modal = document.getElementById('compareModal');
+  modal.style.display = 'none';
+}
 </script>
+<script src="compare_expected.js"></script>
 </div>
 </body>
 </html>
