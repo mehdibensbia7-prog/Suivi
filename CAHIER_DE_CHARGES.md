@@ -48,6 +48,12 @@ L'application doit également protéger les règles métier sensibles autour des
 - Historique de demandes : `C:\Users\z\OneDrive\Desktop\Historique_Requêtes`
 - Correctifs antérieurs : protection du statut payé, mise à jour des liens CDN, audit complet du projet.
 
+## Journal des Correctifs
+- **2026-07-15** — Faille : `compare_expected.js` (`validateBusinessRules`) calculait `wasBrutPaid`/`wasActivPaid` avec `.includes('pay')`, qui matche à tort "Non Payé" (la sous-chaîne "pay" est présente dans "pay**é**"). Conséquence : la validation indépendante des règles métier pouvait manquer un clawback attendu ou signaler à tort une "annulation après paiement sans revue qualité" sur des ventes jamais payées. Ce bug était la réapparition, dans l'outil de validation, du bug déjà corrigé dans `parsePaymentFlag()` d'`index.html`.
+  - Correction : remplacement par une égalité stricte sur texte normalisé (`normalizeText(...) === 'paye'`), cohérent avec `parsePaymentFlag()`.
+  - Fichier modifié : `compare_expected.js` lignes 169-173.
+  - Vérification : lecture du code corrigé confirmée (`normalizeText("Non Payé")` → `"nonpaye"` ≠ `"paye"` ; `normalizeText("Payé")` → `"paye"`).
+
 ## DOCUMENT DE RÉFÉRENCE : SIPP (Système d'Information de Pilotage de Performance)
 
 ### Phase 1 : Historique des demandes (Consolidation des textes)

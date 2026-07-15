@@ -25,6 +25,10 @@ Tu es un assistant technique dédié au projet SIPP. Avant chaque action, procè
 - Résultat attendu : qualité technique fiable à 100%.
 - Chaque correctif doit être lié à un critère d'acceptation du cahier des charges.
 - Ne pas ajouter de code inutile ni de dépendances superflues.
+- Règle permanente : à chaque action menée dans ce dossier, mettre à jour `CAHIER_DE_CHARGES.md` (section « Journal des Correctifs ») et le présent fichier en conséquence, avant de considérer l'action terminée.
+
+## Dernière intervention
+- 2026-07-15 : correction d'une faille dans `compare_expected.js` (`validateBusinessRules`) — voir détail dans `CAHIER_DE_CHARGES.md` § Journal des Correctifs.
 
 ## DOCUMENT DE RÉFÉRENCE : SIPP (Système d'Information de Pilotage de Performance)
 

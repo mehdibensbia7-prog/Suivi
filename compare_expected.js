@@ -166,8 +166,11 @@ async function validateBusinessRules(){
       const etat = (l.statutCRM||'').toString().toLowerCase();
       const isChute = /annul|resil|retract|refus/.test(etat);
       const withinClawback = (mois!==null && mois!==undefined) && mois<=3;
-      const wasBrutPaid = (l.statutPaiementBrut||'').toString().toLowerCase().includes('pay');
-      const wasActivPaid = (l.statutPaiementActivation||'').toString().toLowerCase().includes('pay');
+      // BUG CORRIGÉ : includes('pay') matchait aussi "Non Payé" (qui contient "pay" dans "payé"),
+      // faisant passer toute vente non payée pour payée. On compare désormais l'état normalisé
+      // exact à "paye", cohérent avec parsePaymentFlag() dans index.html.
+      const wasBrutPaid = normalizeText(l.statutPaiementBrut) === 'paye';
+      const wasActivPaid = normalizeText(l.statutPaiementActivation) === 'paye';
       const decommissionManuel = !!l.decommissionManuel;
       const autoClawbackExpected = isChute && withinClawback && !wasBrutPaid && !wasActivPaid;
       if(autoClawbackExpected && !l.decommissionne){
