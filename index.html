@@ -209,7 +209,14 @@
       <h1>Pilotage Ventes — MINT & ConsoPilote</h1>
       <p>Import du fichier de suivi brut → extraction automatique des contrats → moteur de commissions → trésorerie agent.</p>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span id="headerRangeWrap" style="display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;">
+        <span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim);text-transform:uppercase;">Période</span>
+        <input type="date" id="headerDateStart" title="Date début" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;font-family:var(--mono);">
+        <span style="color:var(--ink-dim);font-size:12px;">→</span>
+        <input type="date" id="headerDateEnd" title="Date fin" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;font-family:var(--mono);">
+        <button class="btn ghost" id="headerRangeClear" title="Réinitialiser la plage" style="padding:5px 8px;min-height:auto;font-size:12px;">✕</button>
+      </span>
       <span id="roleBadge" class="role-badge"></span>
       <button class="btn ghost" id="logoutBtn">Déconnexion</button>
     </div>
@@ -276,6 +283,8 @@
   <button class="navbtn" data-tab="kpi">KPI Agents</button>
   <button class="navbtn" data-tab="alertes">Alertes & Compliance</button>
   <button class="navbtn" data-tab="qualite">Suivi Qualité</button>
+  <button class="navbtn" data-tab="negatif">Négatif Financier</button>
+  <button class="navbtn" data-tab="bordereau">Bordereau Mensuel</button>
   <button class="navbtn" data-tab="mesventes">Mes Ventes</button>
 </div>
 
@@ -375,6 +384,35 @@
     </div>
   </div>
 
+  <div class="tab" id="tab-negatif">
+    <div class="summary-grid" id="negatif-summary"></div>
+    <div class="panel">
+      <h2>Analyse des pertes <span class="sub">— Règle A (MINT, brut) : statut ≠ En attente / En attente de caution / Activé → perte 100% du brut. Règle B (ConsoPilote) : statut ≠ Signé / Actif → perte 50% de la commission attendue.</span></h2>
+      <div class="filters">
+        <select id="negatifFilterMarque"><option value="">MINT + ConsoPilote</option><option value="MINT">MINT seul (Règle A)</option><option value="CONSO">ConsoPilote seul (Règle B)</option></select>
+        <select id="negatifFilterAgent"><option value="">Tous les agents</option></select>
+      </div>
+      <div id="table-negatif" class="table-scroll"></div>
+    </div>
+  </div>
+
+  <div class="tab" id="tab-bordereau">
+    <div id="bordereauAlertBanner" style="display:none;background:linear-gradient(90deg,#3a2a10,#2a1e0b);border:1px solid var(--amber);color:var(--amber);padding:12px 16px;margin-bottom:16px;border-radius:8px;font-size:13px;font-weight:700;">
+      📅 Période de facturation active (Bordereau mensuel) — consolidation du 1er au 5 du mois.
+    </div>
+    <div class="panel">
+      <h2>Bordereau mensuel par agent <span class="sub" id="bordereauPeriodLabel">— sur la période sélectionnée ci-dessus</span></h2>
+      <div class="filters" style="align-items:center;">
+        <label style="font-size:12px;color:var(--ink-dim);display:flex;align-items:center;gap:6px;">Seuil taux d'échec (%)
+          <input type="number" id="seuilEchec" min="1" max="100" value="15" style="width:60px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-family:var(--mono);">
+        </label>
+        <button class="btn primary" id="openEmailModalBtn">Configurer &amp; Envoyer les emails</button>
+      </div>
+      <div id="table-bordereau" class="table-scroll"></div>
+      <div class="legend"><span class="tag bad">rouge</span> = Performance Insuffisante (taux d'échec au-delà du seuil). Rémunération Nette = commissions attribuées sur les ventes non négatives (les pertes de la Règle A/B, déjà exclues, sont rappelées à titre informatif.)</div>
+    </div>
+  </div>
+
   <div class="tab" id="tab-mesventes">
     <div class="panel">
       <h2>Mes ventes <span id="mesVentesAgentLabel" class="sub"></span></h2>
@@ -423,10 +461,11 @@
   <div class="modal-backdrop" onclick="hideImportSessionModal(event)">
     <div class="modal-box" onclick="event.stopPropagation()">
       <h3>Choisir le mode d'import</h3>
-      <p>Souhaitez-vous fusionner les nouvelles données dans la session actuelle, ou ouvrir une nouvelle session isolée ?</p>
+      <p><b>Option A — Écraser la session :</b> remplace intégralement les données de la session active par celles du nouveau fichier (la session garde son nom/identité, son historique d'audit est conservé).<br>
+      <b>Option B — Générer une nouvelle session :</b> la session en cours reste archivée telle quelle (consultable dans « Sessions ») et une session distincte, vierge, est créée pour le nouveau fichier.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-        <button class="btn" id="importContinueBtn">Poursuivre la session en cours</button>
-        <button class="btn primary" id="importNewBtn">Ouvrir une nouvelle session</button>
+        <button class="btn warn" id="importOverwriteBtn">Option A — Écraser la session</button>
+        <button class="btn primary" id="importNewBtn">Option B — Générer une nouvelle session</button>
       </div>
     </div>
   </div>
@@ -475,6 +514,35 @@
       <div id="sessionsList" style="max-height:45vh;overflow:auto"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
         <button class="btn" onclick="hideSessionsModal()">Fermer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal configuration/envoi email bordereau (simulation locale — ouvre le client mail via mailto:, aucun envoi automatique) -->
+<div id="emailModal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideEmailModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3>Configurer &amp; Envoyer les emails — Bordereau mensuel</h3>
+      <p style="color:var(--ink-dim);font-size:12px;margin-top:4px">Cette fenêtre prépare le message dans votre propre client mail (mailto:) — SIPP n'envoie jamais d'email automatiquement.</p>
+      <div style="display:grid;gap:10px;margin-top:12px">
+        <label style="font-size:12px;color:var(--ink-dim)">Agent
+          <select id="emailAgentSelect" class="login-input" style="margin-top:4px"></select>
+        </label>
+        <label style="font-size:12px;color:var(--ink-dim)">Adresse de destination
+          <input type="email" id="emailDestInput" class="login-input" placeholder="agent@exemple.com" style="margin-top:4px">
+        </label>
+        <label style="font-size:12px;color:var(--ink-dim)">Objet
+          <input type="text" id="emailSubjectInput" class="login-input" style="margin-top:4px">
+        </label>
+        <label style="font-size:12px;color:var(--ink-dim)">Message (modifiable)
+          <textarea id="emailBodyInput" class="login-input" rows="10" style="margin-top:4px;font-family:var(--mono);font-size:12px;resize:vertical"></textarea>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="hideEmailModal()">Fermer</button>
+        <button class="btn" id="copyEmailBtn">Copier le message</button>
+        <button class="btn primary" id="sendEmailBtn">Ouvrir dans mon client mail</button>
       </div>
     </div>
   </div>
@@ -540,12 +608,13 @@ const ROLE_LABELS = {
   superadmin:'Super Admin', directeur:'Directeur', associes:'Associés', qualite:'Qualité', agent:'Agent'
 };
 const PERM = {
-  superadmin: {tabs:['suivi','finance','calendrier','kpi','alertes','qualite'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi'},
-  directeur:  {tabs:['suivi','finance','calendrier','kpi','alertes','qualite'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi'},
-  associes:   {tabs:['finance','calendrier'],                                   editFinance:false, editQuality:false, manageState:false, defaultTab:'finance'},
-  qualite:    {tabs:['qualite','alertes'],                                      editFinance:false, editQuality:true,  manageState:true,  defaultTab:'qualite'},
-  agent:      {tabs:['mesventes'],                                              editFinance:false, editQuality:false, manageState:false, defaultTab:'mesventes'}
+  superadmin: {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:true},
+  directeur:  {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:false},
+  associes:   {tabs:['finance','calendrier'],                                   editFinance:false, editQuality:false, manageState:false, defaultTab:'finance', superUser:false},
+  qualite:    {tabs:['qualite','alertes'],                                      editFinance:false, editQuality:true,  manageState:true,  defaultTab:'qualite', superUser:false},
+  agent:      {tabs:['mesventes'],                                              editFinance:false, editQuality:false, manageState:false, defaultTab:'mesventes', superUser:false}
 };
+function isSuperUser(){ return currentRole && !!PERM[currentRole].superUser; }
 let currentRole = null;
 let currentAgentName = null;
 function canEditFinance(){ return currentRole && PERM[currentRole].editFinance; }
@@ -608,7 +677,17 @@ async function doLogin(){
   document.getElementById('appRoot').style.display = 'block';
   document.getElementById('roleBadge').textContent = ROLE_LABELS[currentRole] + (currentAgentName ? ' · '+currentAgentName : '');
   applyRolePermissions();
-  try{ await openSippDB(); }catch(e){ console.warn('IndexedDB non disponible :', e); }
+  try{
+    await openSippDB();
+    // Fonctionnalité 4 : restauration automatique de la dernière session active (si présente),
+    // pour ne rien perdre en cas de fermeture d'onglet ou de rechargement de page.
+    const lastSession = getCurrentSessionId();
+    if(lastSession){
+      const meta = await getSessionMeta(lastSession);
+      if(meta) await setCurrentSessionId(lastSession);
+      else localStorage.removeItem('sipp.currentSessionId');
+    }
+  }catch(e){ console.warn('IndexedDB non disponible :', e); }
   resetInactivityTimer();
 }
 function doLogout(reason){
@@ -673,7 +752,10 @@ function refreshPeriodVendredis(){
 }
 document.getElementById('periodType').addEventListener('change', e=>{
   const t = e.target.value;
-  periodFilter.type = t;
+  // toute sélection dans la toolbar reprend la main sur la plage personnalisée du header
+  document.getElementById('headerDateStart').value = '';
+  document.getElementById('headerDateEnd').value = '';
+  periodFilter = { type:t, anchor:null, vendredi:null };
   const dateInp = document.getElementById('periodDate');
   const vendSel = document.getElementById('periodVendredi');
   dateInp.style.display = (t==='all'||t==='vendredi') ? 'none' : '';
@@ -694,6 +776,31 @@ document.getElementById('periodVendredi').addEventListener('change', e=>{
   if(rawLignes.length) renderAll();
 });
 
+/* ---- Bornage temporel universel (header) : Date Début / Date Fin ----
+   Dès que les deux champs sont renseignés, la plage personnalisée prend le pas sur le
+   sélecteur de période de la toolbar (remis visuellement sur « Toute la période » pour
+   éviter toute ambiguïté sur la source de vérité active). */
+function syncHeaderRange(){
+  const s = document.getElementById('headerDateStart').value;
+  const e = document.getElementById('headerDateEnd').value;
+  if(s && e){
+    periodFilter = { type:'range', start:s, end:e, vendredi:null };
+    const sel = document.getElementById('periodType'); if(sel) sel.value = 'all';
+    document.getElementById('periodDate').style.display = 'none';
+    document.getElementById('periodVendredi').style.display = 'none';
+  } else if(periodFilter.type==='range'){
+    periodFilter = { type:'all', anchor:null, vendredi:null };
+  }
+  if(rawLignes.length) renderAll();
+}
+document.getElementById('headerDateStart').addEventListener('change', syncHeaderRange);
+document.getElementById('headerDateEnd').addEventListener('change', syncHeaderRange);
+document.getElementById('headerRangeClear').addEventListener('click', ()=>{
+  document.getElementById('headerDateStart').value = '';
+  document.getElementById('headerDateEnd').value = '';
+  syncHeaderRange();
+});
+
 /* ============================= UI: NAV & MESSAGES ============================= */
 document.querySelectorAll('.navbtn').forEach(b=>{
   b.addEventListener('click', ()=>{
@@ -704,6 +811,8 @@ document.querySelectorAll('.navbtn').forEach(b=>{
     if(b.dataset.tab==='calendrier' && rawLignes.length) renderCalendar();
     if(b.dataset.tab==='qualite' && rawLignes.length) renderQualite();
     if(b.dataset.tab==='mesventes' && rawLignes.length) renderMesVentes();
+    if(b.dataset.tab==='negatif' && rawLignes.length) renderNegatifFinancier();
+    if(b.dataset.tab==='bordereau' && rawLignes.length) renderBordereau();
   });
 });
 function setStatus(msg, kind, badge){
@@ -801,18 +910,32 @@ document.getElementById('sheetSelector').addEventListener('change', ()=>{
   if(fullKey) renderRawSheetPreview(fullKey);
 });
 
-// handlers for import session modal
-document.getElementById('importContinueBtn').addEventListener('click', async ()=>{
+// Option A — Écraser la session : vide entièrement les lignes (et les overrides) de la session
+// active avant d'y ré-insérer les données du nouveau fichier — remplacement complet, pas une fusion.
+function clearLignesForSession(sessionId){
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['lignes'],'readwrite');
+    const store = tx.objectStore('lignes');
+    const req = store.openCursor();
+    req.onsuccess = ev=>{ const cur = ev.target.result; if(!cur){ resolve(true); return; } if(cur.value.sessionId===sessionId) cur.delete(); cur.continue(); };
+    req.onerror = ()=> reject(req.error);
+  });
+}
+document.getElementById('importOverwriteBtn').addEventListener('click', async ()=>{
   hideImportSessionModal();
   await openSippDB();
   let sess = getCurrentSessionId();
   if(!sess){ const meta = await createSession('Session ' + new Date().toLocaleString()); sess = meta.id; }
-  workbooks = pendingWorkbooks; pendingWorkbooks = null;
-  try{ autoDetectAndProcess();
+  else if(!confirm('Écraser définitivement les données actuelles de cette session avec le nouveau fichier ? Cette action est irréversible.')){ return; }
+  try{
+    await clearLignesForSession(sess);
+    overrides = {}; // la session repart d'un état de paiement/décommission vierge
+    workbooks = pendingWorkbooks; pendingWorkbooks = null;
+    autoDetectAndProcess();
     const report = await persistUpsert(sess);
     document.getElementById('importSummaryContent').textContent = JSON.stringify(report,null,2);
     showImportSummaryModal();
-    setStatus(`Import fusionné dans la session (${sess}) — ${report.added} ajoutées, ${report.updated} mises à jour, ${report.ignored} ignorées.`, 'ok');
+    setStatus(`Session écrasée (${sess}) — ${report.added} ligne(s) ré-importée(s).`, 'ok');
   }catch(e){ showError('Erreur après import: '+e.message); setStatus('Erreur import','error'); }
 });
 
@@ -1243,6 +1366,13 @@ function periodBounds(){
   const f = periodFilter;
   if(f.type==='all') return null;
   if(f.type==='vendredi') return {vendredi:f.vendredi||null};
+  // Bornage temporel universel (header) : plage personnalisée Date Début / Date Fin.
+  // Prioritaire sur le sélecteur de la toolbar dès que les deux dates sont renseignées.
+  if(f.type==='range'){
+    const s = parseDate(f.start), e = parseDate(f.end);
+    if(!s || !e) return null;
+    return { start: new Date(s.getFullYear(),s.getMonth(),s.getDate()), end: new Date(e.getFullYear(),e.getMonth(),e.getDate()+1) };
+  }
   const d = f.anchor ? parseDate(f.anchor) : new Date();
   if(!d) return null;
   const y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
@@ -1266,6 +1396,8 @@ function periodLabel(){
   if(f.type==='jour') return fmtDate(s);
   return `${fmtDate(s)} → ${fmtDate(e)}`;
 }
+// résumé compact utilisé par les nouveaux onglets (Négatif Financier / Bordereau)
+function periodBadgeText(){ const l = periodLabel(); return l ? `Période : ${l}` : 'Toute la période'; }
 function periodMatch(l){
   const b = periodBounds();
   if(!b) return true;
@@ -1292,6 +1424,7 @@ function setOverride(id, key, value){
   overrides[id][key] = value;
   const line = rawLignes.find(l=>l.id===id);
   if(line) line[key] = value;
+  autoSaveLine(id); // Fonctionnalité 4 : persistance immédiate (débouncée) de toute modification
   return line;
 }
 
@@ -1384,6 +1517,7 @@ function applyIntrouvableDecision(id, dec){
   if(!wasBrutPaid && l.brut>0) l.statutPaiementBrut = l.tempPerdue ? '—' : ((overrides[id].statutPaiementBrut && overrides[id].statutPaiementBrut!=='—') ? overrides[id].statutPaiementBrut : 'Non Payé');
   if(!wasActivPaid) l.statutPaiementActivation = l.tempPerdue ? '—' : (l.statutPaiementActivation==='—' ? 'Non Payé' : l.statutPaiementActivation);
   l.net = (l.decommissionne || l.tempPerdue) ? 0 : (l.brut + l.activation);
+  autoSaveLine(id); // Fonctionnalité 4 : persistance immédiate de la décision manager
   renderAll();
 }
 
@@ -1459,11 +1593,50 @@ async function setCurrentSessionId(id){
     const lignes = await getAllLignesForSession(id);
     // replace in-memory rawLignes and re-run renders
     rawLignes = (lignes||[]).map(l=>Object.assign({}, l));
+    // Persistance : restaure les overrides (paiements/décommissions/décisions Introuvable/tranches
+    // Conso) sauvegardés avec la session — sans cela, applyReglesToLignes() recalculerait ces
+    // lignes avec des overrides vides et perdrait les éditions faites avant la fermeture de l'onglet.
+    const meta = await getSessionMeta(id);
+    overrides = (meta && meta.overrides) ? meta.overrides : {};
     // réapplique l'agenda des règles : les lignes persistées peuvent dater d'avant un changement
     // de règle (ex. brut 50 DH stocké sur des ventes antérieures à son entrée en vigueur)
     applyReglesToLignes(); // inclut renderAll()
     setStatus('Session chargée: '+(id||'null'),'ok');
   }catch(e){ console.warn('Erreur chargement session', e); setStatus('Erreur chargement session','error'); }
+}
+function getSessionMeta(id){
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['sessions'],'readonly');
+    const req = tx.objectStore('sessions').get(id);
+    req.onsuccess = ()=> resolve(req.result || null);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+// Persistance auto (Fonctionnalité 4) : sauvegarde immédiate de la ligne éditée + des overrides de
+// la session, débouncée pour absorber les éditions rapprochées (ex. saisie clavier) sans spammer IndexedDB.
+let _autoSaveTimers = {};
+function autoSaveLine(id){
+  const sessionId = getCurrentSessionId();
+  if(!sessionId || !sippDB) return;
+  clearTimeout(_autoSaveTimers[id]);
+  _autoSaveTimers[id] = setTimeout(async ()=>{
+    try{
+      const line = rawLignes.find(l=>l.id===id);
+      if(line){
+        const key = sessionId+'::'+line.contrat+'::'+line.type;
+        await putLigneObject(Object.assign({}, line, {sessionId, key}));
+      }
+      const tx = sippDB.transaction(['sessions'],'readwrite');
+      const store = tx.objectStore('sessions');
+      const getReq = store.get(sessionId);
+      getReq.onsuccess = ()=>{
+        const meta = getReq.result || {id:sessionId, name:'Session '+sessionId, createdAt:new Date().toISOString(), createdBy:currentRole||'unknown'};
+        meta.overrides = overrides;
+        meta.lastSavedAt = new Date().toISOString();
+        store.put(meta);
+      };
+    }catch(e){ console.warn('Auto-save échoué pour', id, e); }
+  }, 400);
 }
 
 function getAllLignesForSession(sessionId){
@@ -1585,8 +1758,13 @@ async function loadAndRenderSessions(){
       const right = document.createElement('div');
       const useBtn = document.createElement('button'); useBtn.className='btn'; useBtn.textContent='Ouvrir'; useBtn.onclick = async ()=>{ setCurrentSessionId(s.id); setStatus('Session active: '+s.name,'ok'); hideSessionsModal(); };
       const exportBtn = document.createElement('button'); exportBtn.className='btn'; exportBtn.textContent='Exporter'; exportBtn.onclick = ()=> exportSessionById(s.id);
-      const delBtn = document.createElement('button'); delBtn.className='btn'; delBtn.textContent='Supprimer'; delBtn.onclick = ()=>{ if(confirm('Supprimer la session '+s.name+' ?')) deleteSessionById(s.id).then(()=> loadAndRenderSessions()); };
-      right.appendChild(useBtn); right.appendChild(exportBtn); right.appendChild(delBtn);
+      right.appendChild(useBtn); right.appendChild(exportBtn);
+      // Suppression définitive réservée au rôle Super-Utilisateur existant (currentRole==='superadmin')
+      // — les autres rôles habilités (Directeur, Qualité) peuvent ouvrir/exporter mais pas supprimer.
+      if(isSuperUser()){
+        const delBtn = document.createElement('button'); delBtn.className='btn warn'; delBtn.style.color='var(--red)'; delBtn.style.borderColor='var(--red)'; delBtn.textContent='Supprimer définitivement'; delBtn.onclick = ()=>{ if(confirm('Supprimer définitivement la session '+s.name+' ? Cette action est irréversible.')) deleteSessionById(s.id).then(()=> loadAndRenderSessions()); };
+        right.appendChild(delBtn);
+      }
       el.appendChild(left); el.appendChild(right);
       list.appendChild(el);
     });
@@ -1903,6 +2081,8 @@ function renderAll(){
   renderCalendar();
   renderQualite();
   renderMesVentes();
+  renderNegatifFinancier();
+  renderBordereau();
   // badge de période active + nb de lignes filtrées, visible en permanence
   const lbl = periodLabel();
   const n = filteredLignes().length, t = rawLignes.length;
@@ -2526,6 +2706,7 @@ function renderQualite(){
           const r = cell.getRow().getData();
           overrides[r.id] = overrides[r.id]||{};
           overrides[r.id].motifQualite = cell.getValue();
+          autoSaveLine(r.id); // Fonctionnalité 4 : persistance immédiate
         }
       }
     ]
@@ -2541,6 +2722,218 @@ function renderQualite(){
     if(s==='revue') tQualite.addFilter("Revue_Necessaire","=",true);
   };
 }
+
+/* ============================= NÉGATIF FINANCIER (analyse des pertes) =============================
+   Vue d'analyse INDÉPENDANTE du moteur de paiement (clawback/tranches déjà en place) : elle applique
+   les 2 règles exactes demandées par la Direction, sans modifier net/decommissionne ailleurs dans
+   l'application — pour ne pas contredire les règles déjà validées (clawback 3 mois, tranches Conso). */
+const STATUTS_VIABLES_MINT = ['en attente','en attente de caution','active','activee']; // "Activé" normalisé
+const STATUTS_VIABLES_CONSO = ['signe','actif','active'];
+// Règle A (MINT, brut) : statut ≠ (En attente / En attente de caution / Activé) → perte 100% du brut
+function isPerteA(l){
+  if(l.type!=='MINT' || l.brut<=0) return false;
+  const etat = norm(l.statutCRM);
+  return !STATUTS_VIABLES_MINT.some(s=>etat.includes(s));
+}
+// Règle B (ConsoPilote) : statut ≠ (Signé / Actif) → perte 50% de la commission attendue (100 DH)
+function isPerteB(l){
+  if(l.type!=='CONSO') return false;
+  const etat = norm(l.statutCRM);
+  return !STATUTS_VIABLES_CONSO.some(s=>etat.includes(s));
+}
+function perteMontant(l){
+  if(l.type==='MINT') return isPerteA(l) ? l.brut : 0;      // 100% de la commission brute
+  if(l.type==='CONSO') return isPerteB(l) ? 50 : 0;         // 50% de la commission attendue (100 DH)
+  return 0;
+}
+
+function renderNegatifFinancier(){
+  const L = filteredLignes();
+  const rows = L.filter(l => isPerteA(l) || isPerteB(l));
+  const totalPerteMint = rows.filter(l=>l.type==='MINT').reduce((s,l)=>s+perteMontant(l),0);
+  const totalPerteConso = rows.filter(l=>l.type==='CONSO').reduce((s,l)=>s+perteMontant(l),0);
+
+  document.getElementById('negatif-summary').innerHTML = `
+    <div class="stat-card red"><div class="label">Pertes Règle A (MINT — 100% brut)</div><div class="value">${totalPerteMint} DH</div></div>
+    <div class="stat-card red"><div class="label">Pertes Règle B (ConsoPilote — 50%)</div><div class="value">${totalPerteConso} DH</div></div>
+    <div class="stat-card red"><div class="label">Total pertes</div><div class="value">${totalPerteMint+totalPerteConso} DH</div></div>
+    <div class="stat-card amber"><div class="label">Contrats concernés</div><div class="value">${rows.length}</div></div>
+  `;
+
+  const agents = [...new Set(L.map(l=>l.agent))].sort();
+  const selAgent = document.getElementById('negatifFilterAgent');
+  const curAgent = selAgent.value;
+  selAgent.innerHTML = '<option value="">Tous les agents</option>' + agents.map(a=>`<option value="${a}">${a}</option>`).join('');
+  selAgent.value = curAgent;
+
+  const data = rows.map(l=>({
+    Regle: l.type==='MINT' ? 'A (MINT)' : 'B (ConsoPilote)',
+    Agent: l.agent, Contrat: l.contrat, Date: l.dateVenteStr, Marque: l.type,
+    Statut_Actuel: l.statutCRM, Perte_DH: perteMontant(l)
+  }));
+  if(window.tNegatif) window.tNegatif.destroy();
+  window.tNegatif = new Tabulator("#table-negatif", {
+    data, layout:"fitDataStretch", height:"420px", placeholder:"Aucune perte détectée sur la période.",
+    columns:[
+      {title:"Règle", field:"Regle", width:110, formatter:c=>`<span class="tag ${c.getValue().startsWith('A')?'bad':'warn'}">${c.getValue()}</span>`},
+      {title:"Agent", field:"Agent", widthGrow:2},
+      {title:"Contrat", field:"Contrat", width:110},
+      {title:"Date vente", field:"Date", width:100},
+      {title:"Marque", field:"Marque", width:90},
+      {title:"Statut actuel", field:"Statut_Actuel", widthGrow:1},
+      {title:"Perte (DH)", field:"Perte_DH", width:110, hozAlign:"right", formatter:c=>`<b style="color:var(--red)">-${c.getValue()} DH</b>`}
+    ]
+  });
+  document.getElementById('negatifFilterMarque').onchange = document.getElementById('negatifFilterAgent').onchange = ()=>{
+    const m = document.getElementById('negatifFilterMarque').value;
+    const a = document.getElementById('negatifFilterAgent').value;
+    window.tNegatif.clearFilter();
+    if(m) window.tNegatif.addFilter("Marque","=",m);
+    if(a) window.tNegatif.addFilter("Agent","=",a);
+  };
+}
+
+/* ============================= BORDEREAU MENSUEL + RAPPORT QUALITÉ =============================
+   Consolidation par agent sur la période active (sélecteur toolbar OU plage header — filteredLignes()).
+   « Rémunération à attribuer » = commissions des lignes NON négatives (Règle A/B) ; les lignes
+   négatives contribuent 0 et sont rappelées séparément (Pertes) pour audit — pas de double déduction. */
+function isPeriodeFacturation(d){
+  d = d || new Date();
+  const day = d.getDate();
+  return day>=1 && day<=5;
+}
+function renderBordereauBanner(){
+  const b = document.getElementById('bordereauAlertBanner');
+  if(b) b.style.display = isPeriodeFacturation() ? 'block' : 'none';
+}
+function renderBordereau(){
+  renderBordereauBanner();
+  const L = filteredLignes();
+  const lbl = document.getElementById('bordereauPeriodLabel');
+  if(lbl) lbl.textContent = '— ' + periodBadgeText();
+  const seuil = parseFloat(document.getElementById('seuilEchec')?.value) || 15;
+
+  const byAgent = {};
+  L.forEach(l=>{
+    if(!byAgent[l.agent]) byAgent[l.agent] = {
+      Agent:l.agent, Nb_Mint_Payables:0, Remun_Mint:0, Nb_Conso_Payables:0, Remun_Conso:0,
+      Nb_Mint_Decom:0, Nb_Conso_Negatif:0, Perte_DH:0, _totalVentes:0, _negatives:0
+    };
+    const a = byAgent[l.agent];
+    a._totalVentes++;
+    if(l.type==='MINT'){
+      if(isPerteA(l)){ a.Nb_Mint_Decom++; a.Perte_DH += perteMontant(l); a._negatives++; }
+      else { a.Nb_Mint_Payables++; a.Remun_Mint += (l.brut + l.activation); }
+    } else {
+      if(isPerteB(l)){ a.Nb_Conso_Negatif++; a.Perte_DH += perteMontant(l); a._negatives++; }
+      else { a.Nb_Conso_Payables++; a.Remun_Conso += l.net; }
+    }
+  });
+
+  const data = Object.values(byAgent).map(a=>{
+    const tauxEchec = a._totalVentes ? Math.round(1000*a._negatives/a._totalVentes)/10 : 0;
+    return Object.assign({}, a, {
+      Remun_Nette: a.Remun_Mint + a.Remun_Conso,
+      Taux_Echec: tauxEchec,
+      Insuffisant: tauxEchec > seuil
+    });
+  }).sort((x,y)=>y.Remun_Nette-x.Remun_Nette);
+
+  if(window.tBordereau) window.tBordereau.destroy();
+  window.tBordereau = new Tabulator("#table-bordereau", {
+    data, layout:"fitDataStretch", height:data.length?Math.min(80+data.length*38,460)+"px":"90px",
+    placeholder:"Aucune donnée sur la période sélectionnée.",
+    rowFormatter:row=>{
+      if(row.getData().Insuffisant) row.getElement().style.boxShadow = 'inset 3px 0 0 var(--red)';
+    },
+    columns:[
+      {title:"Agent", field:"Agent", widthGrow:2},
+      {title:"Nb Mint payables", field:"Nb_Mint_Payables", hozAlign:"center", width:130},
+      {title:"Rémun. Mint (DH)", field:"Remun_Mint", hozAlign:"right", width:130},
+      {title:"Nb Conso payables", field:"Nb_Conso_Payables", hozAlign:"center", width:140},
+      {title:"Rémun. Conso (DH)", field:"Remun_Conso", hozAlign:"right", width:140},
+      {title:"Nb Mint décommissionnées", field:"Nb_Mint_Decom", hozAlign:"center", width:170,
+        formatter:c=>c.getValue()>0?`<span class="tag bad">${c.getValue()}</span>`:'0'},
+      {title:"Nb Conso négatif", field:"Nb_Conso_Negatif", hozAlign:"center", width:130,
+        formatter:c=>c.getValue()>0?`<span class="tag bad">${c.getValue()}</span>`:'0'},
+      {title:"Pertes rappelées (DH)", field:"Perte_DH", hozAlign:"right", width:150,
+        formatter:c=>c.getValue()>0?`<span style="color:var(--red)">-${c.getValue()} DH</span>`:'—'},
+      {title:"Rémun. Nette (DH)", field:"Remun_Nette", hozAlign:"right", width:140,
+        formatter:c=>`<b style="color:var(--mint)">${c.getValue()} DH</b>`},
+      {title:"Taux d'échec", field:"Taux_Echec", hozAlign:"center", width:110,
+        formatter:c=>`<span class="tag ${c.getValue()>seuil?'bad':'ok'}">${c.getValue()}%</span>`},
+      {title:"Performance", field:"Insuffisant", widthGrow:1,
+        formatter:c=>c.getValue()?'<span class="tag bad">⚠ Performance Insuffisante</span>':'<span class="tag ok">OK</span>'}
+    ]
+  });
+
+  // options de la modale email : rafraîchies avec les agents de la période
+  const emailSel = document.getElementById('emailAgentSelect');
+  if(emailSel){
+    const cur = emailSel.value;
+    emailSel.innerHTML = data.map(a=>`<option value="${a.Agent}">${a.Agent}</option>`).join('') || '<option value="">(aucun agent sur la période)</option>';
+    if(cur) emailSel.value = cur;
+  }
+  window._bordereauData = data; // consommé par la modale email
+}
+
+document.getElementById('seuilEchec').addEventListener('input', ()=>{ if(rawLignes.length) renderBordereau(); });
+
+/* ---- Modale email (simulation) : ouvre le client mail local via mailto:, aucun envoi automatique ---- */
+function buildEmailTemplate(agentRow){
+  if(!agentRow) return {subject:'', body:''};
+  const subject = `Bordereau mensuel SIPP — ${agentRow.Agent} — ${periodBadgeText()}`;
+  const body = `Bonjour ${agentRow.Agent},
+
+Voici le récapitulatif de votre bordereau de commissions pour la période : ${periodBadgeText()}.
+
+— MINT —
+Contrats payables : ${agentRow.Nb_Mint_Payables}
+Rémunération Mint : ${agentRow.Remun_Mint} DH
+Contrats décommissionnés (Règle A) : ${agentRow.Nb_Mint_Decom}
+
+— ConsoPilote —
+Contrats payables : ${agentRow.Nb_Conso_Payables}
+Rémunération ConsoPilote : ${agentRow.Remun_Conso} DH
+Contrats en statut négatif (Règle B) : ${agentRow.Nb_Conso_Negatif}
+
+— Synthèse —
+Pertes rappelées : ${agentRow.Perte_DH} DH
+Rémunération nette à payer : ${agentRow.Remun_Nette} DH
+Taux d'échec : ${agentRow.Taux_Echec}%${agentRow.Insuffisant ? ' — ⚠ Performance Insuffisante (au-delà du seuil)' : ''}
+
+Cordialement,
+Direction d'Exploitation & de Production — SIPP`;
+  return {subject, body};
+}
+function showEmailModal(){
+  const sel = document.getElementById('emailAgentSelect');
+  const fillFromAgent = ()=>{
+    const row = (window._bordereauData||[]).find(a=>a.Agent===sel.value);
+    const tpl = buildEmailTemplate(row);
+    document.getElementById('emailSubjectInput').value = tpl.subject;
+    document.getElementById('emailBodyInput').value = tpl.body;
+  };
+  sel.onchange = fillFromAgent;
+  if(sel.value) fillFromAgent();
+  document.getElementById('emailModal').style.display = 'block';
+}
+function hideEmailModal(e){ document.getElementById('emailModal').style.display = 'none'; }
+document.getElementById('openEmailModalBtn').addEventListener('click', showEmailModal);
+document.getElementById('copyEmailBtn').addEventListener('click', async ()=>{
+  const txt = document.getElementById('emailSubjectInput').value + '\n\n' + document.getElementById('emailBodyInput').value;
+  try{ await navigator.clipboard.writeText(txt); setStatus('Message copié dans le presse-papiers.','ok'); }
+  catch(e){ alert('Copie impossible — sélectionnez et copiez manuellement.'); }
+});
+// « Envoyer » ouvre le client mail LOCAL de l'utilisateur (mailto:) prérempli — SIPP ne transmet
+// jamais l'email lui-même : l'utilisateur reste seul décisionnaire de l'envoi final.
+document.getElementById('sendEmailBtn').addEventListener('click', ()=>{
+  const dest = document.getElementById('emailDestInput').value.trim();
+  if(!dest){ alert('Indiquez une adresse de destination.'); return; }
+  const subject = encodeURIComponent(document.getElementById('emailSubjectInput').value);
+  const body = encodeURIComponent(document.getElementById('emailBodyInput').value);
+  window.location.href = `mailto:${encodeURIComponent(dest)}?subject=${subject}&body=${body}`;
+});
 
 /* ============================= MES VENTES (accès agent, lecture seule, personnalisé) ============================= */
 function renderMesVentes(){
