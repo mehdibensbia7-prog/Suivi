@@ -1634,6 +1634,8 @@ function applyReglesToLignes(){
       l.tempPerdue = introuvable && dec==='attente';
       const wasBrutPaid = l.statutPaiementBrut==='Payé';
       const wasActivPaid = l.statutPaiementActivation==='Payé';
+      // marqueur « réglé par compensation d'avance » : restauré depuis l'override ou la ligne persistée
+      l.payeParCompensation = !!(o.payeParCompensation || l.payeParCompensation);
       // Clawback : brut jamais repris automatiquement (seule la Qualité peut l'annuler via
       // decommissionManuel) ; activation reprise automatiquement dès chute dans la fenêtre — voir
       // computeMintClawback() pour le détail de la règle.
@@ -1733,14 +1735,18 @@ function getSessionMeta(id){
    (un seul enregistrement, id fixe 'main'), jamais dans `overrides`/`rawLignes`. */
 const CAISSE_ID = 'main';
 function defaultCaisseState(){
-  return { id:CAISSE_ID, soldeInitial:0, injections:[], mintDebits:[], avances:{}, avanceHistorique:[] };
+  return { id:CAISSE_ID, soldeInitial:0, injections:[], mintDebits:[], avances:{}, avanceHistorique:[], compensations:[] };
 }
 async function loadCaisseState(){
   await openSippDB();
   return new Promise((resolve,reject)=>{
     const tx = sippDB.transaction(['caisse'],'readonly');
     const req = tx.objectStore('caisse').get(CAISSE_ID);
-    req.onsuccess = ()=> resolve(req.result || defaultCaisseState());
+    req.onsuccess = ()=>{
+      const s = req.result || defaultCaisseState();
+      s.compensations = s.compensations || []; // migration : états antérieurs au registre des compensations actées
+      resolve(s);
+    };
     req.onerror = ()=> reject(req.error);
   });
 }
@@ -1758,6 +1764,9 @@ async function saveCaisseState(state){
 // re-rend plusieurs fois) via une vérification sur l'id de ligne déjà enregistré.
 async function debitCaisseMint(line){
   if(!line || line.type!=='MINT' || line.brut<=0) return;
+  // un brut réglé PAR COMPENSATION d'avance n'est pas une sortie de cash : le cash est sorti au moment
+  // où l'avance a été versée — le débiter ici compterait la même somme deux fois.
+  if(line.payeParCompensation) return;
   const state = await loadCaisseState();
   if(state.mintDebits.some(m=>m.lineId===line.id)) return; // déjà débité, ne pas dupliquer
   state.mintDebits.push({ lineId:line.id, contrat:line.contrat, agent:line.agent, montant:line.brut, date:new Date().toISOString() });
@@ -1775,7 +1784,8 @@ function caisseSolde(state){
 async function reconcileCaisseDebits(state){
   let changed = false;
   rawLignes.forEach(l=>{
-    if(l.type==='MINT' && l.brut>0 && l.statutPaiementBrut==='Payé' && !state.mintDebits.some(m=>m.lineId===l.id)){
+    // !l.payeParCompensation : un brut réglé par compensation d'avance ne sort pas de cash (voir debitCaisseMint)
+    if(l.type==='MINT' && l.brut>0 && l.statutPaiementBrut==='Payé' && !l.payeParCompensation && !state.mintDebits.some(m=>m.lineId===l.id)){
       state.mintDebits.push({ lineId:l.id, contrat:l.contrat, agent:l.agent, montant:l.brut, date:new Date().toISOString() });
       changed = true;
     }
@@ -1845,6 +1855,53 @@ async function refreshCaisseCache(){
 async function onCaisseChanged(){
   await refreshCaisseCache();
   if(typeof renderFinance === 'function') renderFinance();
+  renderCaisse();
+}
+
+/* ---- ACTER LA COMPENSATION (correctif audit D3 — risque de double paiement) ----
+   La compensation dérivée bloque les bruts mais ne les « consomme » jamais : sans acte, un « Solder »
+   manuel annulerait la dette ET débloquerait les bruts (payables cash ensuite = agent payé deux fois).
+   Cette action rend la compensation DÉFINITIVE, atomiquement :
+     1. chaque brut ENTIÈREMENT affecté (montant = brut, pas de paiement fractionné) passe
+        « Payé » avec marqueur `payeParCompensation` (verrou 🔒 habituel, AUCUNE sortie de caisse) ;
+     2. la dette (`avances[agent]`) est réduite du total acté (soldée si reliquat nul) ;
+     3. l'opération est journalisée à vie dans `state.compensations` (rapport Transactions automatiques)
+        et dans `avanceHistorique`.
+   Un reliquat de dette < 50 DH reste en avance et continue de bloquer partiellement le contrat suivant,
+   jusqu'à être couvert par une vente future puis acté, ou soldé manuellement (décision manager). */
+async function acterCompensation(agent){
+  if(!canEditCaisse()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
+  await refreshCaisseCache();
+  const info = compensationByAgent[agent];
+  if(!info || info.compensation<=0){ showError(`Aucun brut affecté à la dette de ${agent} — rien à acter.`); return; }
+  // seuls les contrats ENTIÈREMENT affectés sont actables (un brut ne se paie pas en fraction)
+  const full = info.contrats.filter(c=>{
+    const l = rawLignes.find(x=>x.id===c.lineId);
+    return l && c.montant === l.brut;
+  });
+  if(!full.length){
+    showError(`La dette restante de ${agent} (${info.dette} DH) n'affecte que partiellement un contrat (< montant du brut) — attendez une vente future pour la couvrir, ou soldez/ajustez l'avance manuellement.`);
+    return;
+  }
+  const total = full.reduce((s,c)=>s+c.montant,0);
+  const reliquat = info.dette - total;
+  if(!confirm(`Acter la compensation de ${agent} ?\n\n• ${full.length} contrat(s) MINT × Brut = ${total} DH seront marqués « Payé (compensation avance) » — verrouillés, AUCUNE sortie de caisse.\n• Dette réduite : ${info.dette} DH → ${reliquat} DH${reliquat<=0 ? ' (avance entièrement soldée)' : ' (reliquat conservé en avance)'}\n\nCette opération est définitive (réversion uniquement via l'onglet Qualité).`)) return;
+  const state = await loadCaisseState();
+  const nowIso = new Date().toISOString();
+  full.forEach(c=>{
+    setOverride(c.lineId, 'statutPaiementBrut', 'Payé');
+    setOverride(c.lineId, 'payeParCompensation', true);
+    setOverride(c.lineId, 'datePaiementBrut', fmtDate(new Date()));
+    state.compensations.push({ date:nowIso, agent, lineId:c.lineId, contrat:c.contrat, montant:c.montant });
+  });
+  const ancien = state.avances[agent]||0;
+  const nouveau = Math.max(0, ancien - total);
+  if(nouveau<=0) delete state.avances[agent]; else state.avances[agent] = nouveau;
+  state.avanceHistorique.push({ date:nowIso, agent, ancien, nouveau, motif:`Compensation actée (${full.length} contrat(s), ${total} DH)` });
+  await saveCaisseState(state);
+  setStatus(`Compensation actée pour ${agent} : ${total} DH (${full.length} contrat(s)) — dette ${ancien} DH → ${nouveau} DH.`, 'ok');
+  await refreshCaisseCache();
+  renderAll();      // les statuts de paiement ont changé : tous les onglets consommateurs se resynchronisent
   renderCaisse();
 }
 
@@ -1921,10 +1978,26 @@ async function renderCaisse(){
       {title:'Agent', field:'agent', widthGrow:2},
       {title:'Avance en cours (DH)', field:'montant', hozAlign:'right', width:160,
         formatter:c=>`<b style="color:var(--amber)">${c.getValue()} DH</b>`},
-      {title:'', field:'_actions', width:120, formatter:()=> `<button class="btn" style="min-height:auto;padding:4px 8px;font-size:11px">Solder</button>`,
-        cellClick:async (e,cell)=>{
+      {title:'', field:'_actions', width:230, formatter:cell=>{
           const agent = cell.getRow().getData().agent;
-          if(!confirm(`Solder entièrement l'avance de ${agent} ?`)) return;
+          const comp = compensationByAgent[agent];
+          const actable = comp && comp.compensation>0
+            ? `<button class="btn primary" data-act="acter" style="min-height:auto;padding:4px 8px;font-size:11px" title="Consomme les bruts affectés (Payé — compensation) et réduit la dette d'autant — aucune sortie de caisse">Acter ${comp.compensation} DH</button> `
+            : '';
+          return actable + `<button class="btn" data-act="solder" style="min-height:auto;padding:4px 8px;font-size:11px">Solder</button>`;
+        },
+        cellClick:async (e,cell)=>{
+          const act = e.target && e.target.dataset ? e.target.dataset.act : null;
+          if(!act) return;
+          const agent = cell.getRow().getData().agent;
+          if(act==='acter'){ acterCompensation(agent); return; }
+          // Solder = ANNULER la dette. Si des bruts sont encore affectés, prévenir explicitement :
+          // solder sans acter les débloque (repayables cash) — la compensation ne serait jamais consommée.
+          const comp = compensationByAgent[agent];
+          const msg = (comp && comp.compensation>0)
+            ? `⚠ ${comp.compensation} DH de bruts MINT sont actuellement affectés au remboursement de la dette de ${agent}.\n\nSolder = ANNULER la dette SANS consommer ces bruts : ils seront débloqués et redeviendront payables en CASH à l'agent.\nPour transformer les bruts affectés en remboursement définitif, utilisez « Acter » à la place.\n\nConfirmer le solde (annulation pure de la dette) ?`
+            : `Solder entièrement l'avance de ${agent} ?`;
+          if(!confirm(msg)) return;
           const st = await loadCaisseState();
           st.avanceHistorique.push({date:new Date().toISOString(), agent, ancien:st.avances[agent]||0, nouveau:0, motif:'Soldée manuellement'});
           delete st.avances[agent];
@@ -1935,15 +2008,23 @@ async function renderCaisse(){
     ]
   });
 
-  // ---- Transactions automatiques : bruts affectés au remboursement des avances (dérivé) ----
+  // ---- Transactions automatiques : bruts affectés (dérivé, en cours) + compensations ACTÉES (registre permanent) ----
   const autoTx = [];
+  // 1. registre permanent : compensations actées (les bruts sont « Payé — compensation », la dette a été réduite)
+  (state.compensations||[]).slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).forEach(cp=>{
+    autoTx.push({
+      Date: fmtDate(new Date(cp.date)), Agent:cp.agent, Contrat:cp.contrat, DateVente:'—', Echeance:'—',
+      Montant:cp.montant, DetteApres:null, Etat:'Actée ✓'
+    });
+  });
+  // 2. affectations en cours (dérivées) : bruts bloqués en attente d'être actés
   Object.keys(compensationByAgent).sort().forEach(agent=>{
     const info = compensationByAgent[agent];
     info.contrats.forEach(ct=>{
       autoTx.push({
-        Agent:agent, Contrat:ct.contrat, DateVente:ct.dateVenteStr, Echeance:ct.echeanceStr,
+        Date:'—', Agent:agent, Contrat:ct.contrat, DateVente:ct.dateVenteStr, Echeance:ct.echeanceStr,
         Montant:ct.montant, DetteApres:ct.detteApres,
-        Etat: ct.detteApres>0 ? 'Dette restante' : 'Dette soldée'
+        Etat: ct.detteApres>0 ? 'Dette restante' : 'Dette couverte'
       });
     });
   });
@@ -1952,6 +2033,7 @@ async function renderCaisse(){
     data:autoTx, layout:'fitDataStretch', height: autoTx.length?Math.min(80+autoTx.length*36,420)+'px':'80px',
     placeholder:'Aucune avance non soldée à rembourser — aucun brut affecté pour le moment.',
     columns:[
+      {title:'Date actée', field:'Date', width:110},
       {title:'Agent', field:'Agent', widthGrow:2},
       {title:'N° Contrat MINT', field:'Contrat', width:140},
       {title:'Date de vente', field:'DateVente', width:120},
@@ -1959,9 +2041,16 @@ async function renderCaisse(){
       {title:'Affecté à la dette (DH)', field:'Montant', hozAlign:'right', width:170,
         formatter:c=>`<b style="color:#3fd6a4">−${c.getValue()} DH</b>`},
       {title:'Dette restante après (DH)', field:'DetteApres', hozAlign:'right', width:180,
-        formatter:c=>`<span style="color:${c.getValue()>0?'var(--amber)':'#8ea0bd'}">${c.getValue()} DH</span>`},
+        formatter:c=>c.getValue()===null?'<span style="color:var(--ink-dim)">—</span>':`<span style="color:${c.getValue()>0?'var(--amber)':'#8ea0bd'}">${c.getValue()} DH</span>`},
       {title:'État', field:'Etat', width:130,
-        formatter:c=>`<span class="tag ${c.getValue()==='Dette soldée'?'ok':'warn'}">${c.getValue()}</span>`}
+        formatter:c=>{
+          const v=c.getValue();
+          const cls = v==='Actée ✓' ? 'ok' : (v==='Dette couverte' ? 'ok' : 'warn');
+          const tip = v==='Actée ✓' ? 'Compensation définitive : brut marqué Payé (compensation), dette réduite'
+            : (v==='Dette couverte' ? 'La dette est entièrement couverte par les bruts affectés — cliquez « Acter » dans le tableau des avances pour rendre la compensation définitive'
+            : 'Brut affecté, dette non encore couverte en totalité');
+          return `<span class="tag ${cls}" title="${tip}">${v}</span>`;
+        }}
     ]
   });
 
@@ -2660,6 +2749,7 @@ function buildLignes(aSources, statusMap, hasCRM){
       // payé auparavant → paiement suspendu/non payable (« — »). Sinon le brut reste toujours éditable.
       statutPaiementBrut: (brut===0 || (tempPerdue && !wasBrutPaid) || (cb.brutAnnule && !wasBrutPaid)) ? '—' : (manualOverride.statutPaiementBrut || (payeBrutPaid ? 'Payé' : 'Non Payé')),
       statutPaiementActivation: (tempPerdue && !wasActivPaid) ? '—' : (manualOverride.statutPaiementActivation || 'Non Payé'),
+      payeParCompensation: !!manualOverride.payeParCompensation, // brut réglé par compensation d'avance (pas de sortie de caisse)
       datePaiementBrut: manualOverride.datePaiementBrut || null,
       motifQualite: manualOverride.motifQualite || '',
       pending: isPending,
@@ -2754,6 +2844,7 @@ function renderFinance(){
         id:l.id, Type:'MINT', Agent:l.agent, Date:l.dateVenteStr, Vendredi:l.vendrediPaiementStr,
         Contrat:l.contrat,
         Brut:l.brut,
+        PayeCompensation: !!l.payeParCompensation,
         // Le brut n'est annulé QUE par un refus Qualité explicite (l.brutAnnule) — jamais par le
         // clawback automatique de l'activation (l.decommissionne).
         Statut_Brut: l.brutAnnule ? (wasBrutPaid ? 'Payé — annulé qualité' : '—') : l.statutPaiementBrut,
@@ -2803,6 +2894,7 @@ function renderFinance(){
             return `<span class="tag warn" title="Brut affecté au remboursement de l'avance de ${comp.agent} (${comp.applied} DH) — paiement cash bloqué tant que la dette n'est pas soldée. Détail dans l'onglet Caisse › Transactions automatiques.">Affecté avance 🔒</span>`;
           }
           if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
+          if(v==='Payé' && r.PayeCompensation) return `<span class="tag ok" title="Réglé par compensation d'avance (aucune sortie de caisse — la dette de l'agent a été réduite d'autant). Verrouillé : réversion via l'onglet Suivi Qualité uniquement.">Payé (compensation) 🔒</span>`;
           if(v==='Payé') return `<span class="tag ok" title="Verrouillé : un paiement ne peut être défait que via l'onglet Suivi Qualité (Annulation Qualité)">${v} 🔒</span>`;
           if(v==='En attente') return `<span class="tag warn" title="Rémunération en attente : statut ≠ Signé ou prélèvement inactif">${v}</span>`;
           if(v.startsWith('À venir')) return `<span style="color:var(--ink-dim)">${v}</span>`;
