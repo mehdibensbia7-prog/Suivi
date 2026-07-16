@@ -424,7 +424,10 @@
   <div class="tab" id="tab-caisse">
     <div class="summary-grid" id="caisse-summary"></div>
     <div class="panel">
-      <h2>Mouvements de caisse <span class="sub">— entrées manuelles (fonds injectés) et sorties automatiques (Brut MINT payé) ; registre indépendant de la session d'import active</span></h2>
+      <h2>Mouvements de caisse <span class="sub">— entrées manuelles (fonds injectés) et sorties automatiques (Brut MINT payé) ; registre indépendant de la session d'import active</span>
+        <label class="btn file-btn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;margin-left:8px;" title="Remplace l'état actuel de la caisse par une sauvegarde .json (confirmation obligatoire)">⭱ Restaurer<input type="file" id="importCaisseStateInput" accept=".json" style="display:none"></label>
+        <button class="btn" id="exportCaisseStateBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;" title="Télécharge l'état complet de la caisse (injections, débits, avances, compensations) — la caisse ne vit que dans ce navigateur : sauvegardez régulièrement">⭳ Sauvegarder la caisse (.json)</button>
+      </h2>
       <div class="filters" id="caisseInjectionForm" style="align-items:center">
         <input type="number" id="caisseInjectMontant" placeholder="Montant (DH)" style="width:140px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:9px 12px;font-family:var(--mono);">
         <input type="text" id="caisseInjectMotif" placeholder="Motif (ex. dotation mensuelle)" style="flex:1;min-width:200px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:9px 12px;">
@@ -1844,6 +1847,10 @@ function computeAvanceCompensation(){
 }
 // Un brut affecté (même partiellement) à une dette est bloqué au paiement cash.
 function isBrutBlockedByAvance(id){ return !!(compensationMap[id] && compensationMap[id].applied > 0); }
+// Part du brut d'une ligne affectée au remboursement d'une avance (0 si non affectée).
+// Sert à corriger les projections de CASH (audit D4) : cette part sera consommée par « Acter »,
+// jamais décaissée — la compter dans « à payer » surestimerait le cash à préparer.
+function brutAffecteAvance(l){ const c = compensationMap[l.id]; return c ? c.applied : 0; }
 // Recharge l'état caisse en cache synchrone puis recalcule la compensation (avances ↔ bruts).
 async function refreshCaisseCache(){
   try{ caisseCache = await loadCaisseState(); }
@@ -2123,6 +2130,46 @@ document.getElementById('caisseAvanceBtn').addEventListener('click', async ()=>{
 });
 document.getElementById('exportCaisseAgentsBtn').addEventListener('click', ()=> exportTable(window.tCaisseAgents, 'sipp_caisse_recap_agents'));
 document.getElementById('exportCaisseAutoTxBtn').addEventListener('click', ()=> exportTable(window.tCaisseAutoTx, 'sipp_caisse_transactions_auto'));
+
+/* ---- Sauvegarde / restauration de l'état de la Caisse (correctif audit R3) ----
+   La caisse ne vit que dans l'IndexedDB d'UN navigateur : un nettoyage des données de navigation ou
+   un changement de poste effacerait tout le registre financier (injections, avances, compensations).
+   L'export .json permet une sauvegarde externe ; la restauration REMPLACE l'état courant après
+   confirmation détaillée (soldes actuel vs sauvegardé affichés côte à côte). */
+document.getElementById('exportCaisseStateBtn').addEventListener('click', async ()=>{
+  if(!canEditCaisse()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
+  const state = await loadCaisseState();
+  const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'sipp_caisse_backup_'+new Date().toISOString().slice(0,10)+'.json';
+  a.click();
+  setStatus(`Sauvegarde de la caisse téléchargée (solde ${caisseSolde(state)} DH).`, 'ok');
+});
+document.getElementById('importCaisseStateInput').addEventListener('change', function(e){
+  const file = this.files[0]; this.value=''; if(!file) return;
+  if(!canEditCaisse()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
+  const reader = new FileReader();
+  reader.onload = async ev=>{
+    try{
+      const obj = JSON.parse(ev.target.result);
+      // validation stricte du schéma avant d'écraser quoi que ce soit
+      if(!obj || obj.id!==CAISSE_ID || !Array.isArray(obj.injections) || !Array.isArray(obj.mintDebits)
+         || typeof obj.avances!=='object' || Array.isArray(obj.avances)){
+        showError('Fichier invalide : ce n\'est pas une sauvegarde de caisse SIPP (structure inattendue).'); return;
+      }
+      obj.avanceHistorique = obj.avanceHistorique || [];
+      obj.compensations = obj.compensations || [];
+      obj.soldeInitial = obj.soldeInitial || 0;
+      const cur = await loadCaisseState();
+      if(!confirm(`Restaurer la caisse depuis « ${file.name} » ?\n\nÉtat ACTUEL : solde ${caisseSolde(cur)} DH · ${cur.injections.length} injection(s) · ${Object.keys(cur.avances).length} avance(s) active(s) · ${(cur.compensations||[]).length} compensation(s) actée(s)\nSAUVEGARDE : solde ${caisseSolde(obj)} DH · ${obj.injections.length} injection(s) · ${Object.keys(obj.avances).length} avance(s) active(s) · ${obj.compensations.length} compensation(s) actée(s)\n\n⚠ L'état actuel sera entièrement REMPLACÉ — sauvegardez-le d'abord si nécessaire.`)) return;
+      await saveCaisseState(obj);
+      setStatus(`Caisse restaurée depuis ${file.name} (solde ${caisseSolde(obj)} DH).`, 'ok');
+      onCaisseChanged();
+    }catch(err){ showError('Lecture impossible : '+err.message); }
+  };
+  reader.readAsText(file);
+});
 
 /* ---- Import du fichier Avance.xlsx (Spéc 3) : suggestion + confirmation obligatoire ---- */
 // heuristique de correspondance « prénom court → agent complet » : les entrées du fichier Avance
@@ -3119,16 +3166,20 @@ function renderDuParAgent(){
   const todayMid = new Date(); todayMid.setHours(0,0,0,0);
   const byAgent = {};
   filteredLignes().forEach(l=>{
-    if(!byAgent[l.agent]) byAgent[l.agent] = {Agent:l.agent, Brut_du:0, Retard:0, Activ_du:0, Conso_du:0};
+    if(!byAgent[l.agent]) byAgent[l.agent] = {Agent:l.agent, Brut_du:0, Affecte:0, Retard:0, Activ_du:0, Conso_du:0};
     const a = byAgent[l.agent];
     if(l.type==='MINT'){
       if(l.tempPerdue) return;
       // Brut dû sauf refus Qualité explicite (l.brutAnnule) — le clawback auto de l'activation ne
-      // suspend jamais le brut.
+      // suspend jamais le brut. Projection de CASH (audit D4) : la part affectée à une avance est
+      // isolée (colonne « Affecté avance »), elle ne sera jamais décaissée.
       if(!l.brutAnnule && l.brut>0 && l.statutPaiementBrut!=='Payé'){
-        a.Brut_du += l.brut;
+        const aff = brutAffecteAvance(l);
+        const cash = l.brut - aff;
+        a.Brut_du += cash;
+        a.Affecte += aff;
         const vp = toDateSafe(l.vendrediPaiement) || parseDate(l.vendrediPaiementStr||'');
-        if(vp && vp.getTime() < todayMid.getTime()) a.Retard += l.brut;
+        if(vp && vp.getTime() < todayMid.getTime() && cash>0) a.Retard += cash;
       }
       if(!l.decommissionne && l.activation>0 && l.statutPaiementActivation!=='Payé') a.Activ_du += l.activation;
     } else {
@@ -3139,7 +3190,7 @@ function renderDuParAgent(){
   });
   const data = Object.values(byAgent)
     .map(a=>Object.assign({}, a, {Total_du: a.Brut_du + a.Activ_du + a.Conso_du}))
-    .filter(a=>a.Total_du>0)
+    .filter(a=>a.Total_du>0 || a.Affecte>0)
     .sort((x,y)=>y.Total_du-x.Total_du);
   if(window.tDuAgent) window.tDuAgent.destroy();
   window.tDuAgent = new Tabulator(cont, {
@@ -3147,12 +3198,14 @@ function renderDuParAgent(){
     placeholder:"Rien à payer — tous les agents sont soldés.",
     columns:[
       {title:"Agent", field:"Agent", widthGrow:2},
-      {title:"Brut MINT dû (DH)", field:"Brut_du", hozAlign:"right", width:140},
+      {title:"Brut MINT dû CASH (DH)", field:"Brut_du", hozAlign:"right", width:160},
+      {title:"Affecté avance (DH)", field:"Affecte", hozAlign:"right", width:150,
+        formatter:c=>c.getValue()>0?`<span class="tag warn" title="Part des bruts affectée au remboursement de l'avance de l'agent — ne sera pas décaissée (à acter dans l'onglet Caisse)">${c.getValue()} DH</span>`:'<span style="color:var(--ink-dim)">—</span>'},
       {title:"dont en retard", field:"Retard", hozAlign:"right", width:130,
         formatter:c=>c.getValue()>0?`<span class="tag bad">${c.getValue()} DH</span>`:'<span style="color:var(--ink-dim)">—</span>'},
       {title:"Activation due (DH)", field:"Activ_du", hozAlign:"right", width:150},
       {title:"Conso dû (DH)", field:"Conso_du", hozAlign:"right", width:130},
-      {title:"TOTAL dû (DH)", field:"Total_du", hozAlign:"right", width:130,
+      {title:"TOTAL dû CASH (DH)", field:"Total_du", hozAlign:"right", width:150,
         formatter:c=>`<b style="color:var(--amber)">${c.getValue()} DH</b>`}
     ]
   });
@@ -3255,10 +3308,16 @@ function renderPayroll(){
   // automatiquement (seul un refus Qualité explicite, l.brutAnnule, peut l'annuler).
   filteredLignes().filter(l=>l.type==='MINT' && !l.brutAnnule && !l.tempPerdue && l.brut>0).forEach(l=>{
     const key = l.vendrediPaiementStr || '—';
-    if(!byVendredi[key]) byVendredi[key] = {Vendredi:key, Contrats:0, Brut_a_payer:0, Brut_paye:0};
+    if(!byVendredi[key]) byVendredi[key] = {Vendredi:key, Contrats:0, Brut_a_payer:0, Brut_paye:0, Par_compensation:0};
     byVendredi[key].Contrats++;
     if(l.statutPaiementBrut==='Payé') byVendredi[key].Brut_paye += l.brut;
-    else byVendredi[key].Brut_a_payer += l.brut;
+    else {
+      // projection de CASH (audit D4) : la part affectée à une avance ne sera jamais décaissée
+      // (consommée par « Acter ») — elle est isolée dans sa propre colonne au lieu de gonfler le dû.
+      const aff = brutAffecteAvance(l);
+      byVendredi[key].Brut_a_payer += l.brut - aff;
+      byVendredi[key].Par_compensation += aff;
+    }
   });
   const data = Object.values(byVendredi).sort((a,b)=>{
     const [da,ma,ya]=a.Vendredi.split('/'); const [db,mb,yb]=b.Vendredi.split('/');
@@ -3286,8 +3345,10 @@ function renderPayroll(){
         return v===today ? `<b style="color:var(--amber)">${v} — prochain</b>` : v;
       }},
       {title:"Contrats MINT", field:"Contrats", hozAlign:"center", width:120},
-      {title:"Brut à payer (DH)", field:"Brut_a_payer", hozAlign:"right", width:150,
+      {title:"Brut à payer CASH (DH)", field:"Brut_a_payer", hozAlign:"right", width:160,
         formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Affecté avance (DH)", field:"Par_compensation", hozAlign:"right", width:150,
+        formatter:c=>c.getValue()>0?`<span class="tag warn" title="Part des bruts affectée au remboursement d'avances — ne sera pas décaissée (à acter dans l'onglet Caisse)">${c.getValue()} DH</span>`:'<span style="color:var(--ink-dim)">—</span>'},
       {title:"Brut déjà payé (DH)", field:"Brut_paye", hozAlign:"right", width:150}
     ]
   });
@@ -3297,6 +3358,7 @@ function renderFinanceSummary(){
   const box = document.getElementById('finance-summary');
   let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0, avances=0;
   let retardDH=0, retardN=0, recupDH=0, consoAttente=0, consoPerdu=0, introuvableDH=0, introuvableN=0;
+  let brutAffecte=0; // part des bruts affectée aux avances : jamais décaissée (audit D4)
   const prochainVendredi = fmtDate(nextFriday(new Date()));
   let brutVendrediProchain = 0;
   const todayMid = new Date(); todayMid.setHours(0,0,0,0);
@@ -3318,10 +3380,14 @@ function renderFinanceSummary(){
           brutPaye += l.brut;
           if(isAvance(l)) avances += l.brut;
         } else if(l.brut>0){
-          brutDu += l.brut;
-          if(l.vendrediPaiementStr===prochainVendredi) brutVendrediProchain += l.brut;
+          // projection de CASH (audit D4) : la part affectée à une avance ne sera jamais décaissée
+          const aff = brutAffecteAvance(l);
+          const cash = l.brut - aff;
+          brutAffecte += aff;
+          brutDu += cash;
+          if(l.vendrediPaiementStr===prochainVendredi) brutVendrediProchain += cash;
           const vp = toDateSafe(l.vendrediPaiement) || parseDate(l.vendrediPaiementStr||'');
-          if(vp && vp.getTime() < todayMid.getTime()){ retardDH += l.brut; retardN++; }
+          if(vp && vp.getTime() < todayMid.getTime() && cash>0){ retardDH += cash; retardN++; }
         }
       }
       // Activation : due seulement si non décommissionnée (clawback auto ou refus Qualité)
@@ -3344,7 +3410,8 @@ function renderFinanceSummary(){
     <div class="stat-card red"><div class="label">⚠ Brut en retard (vendredis échus)</div><div class="value">${retardDH} DH · ${retardN} ct</div></div>
     <div class="stat-card red"><div class="label">Brut MINT — vendredi ${prochainVendredi}</div><div class="value">${brutVendrediProchain} DH</div></div>
     <div class="stat-card amber"><div class="label">TOTAL à payer (brut+activ+conso)</div><div class="value">${totalDu} DH</div></div>
-    <div class="stat-card mint"><div class="label">Brut MINT à payer (total)</div><div class="value">${brutDu} DH</div></div>
+    <div class="stat-card mint"><div class="label">Brut MINT à payer CASH (total)</div><div class="value">${brutDu} DH</div></div>
+    <div class="stat-card amber" title="Part des bruts affectée au remboursement d'avances non soldées — ne sera jamais décaissée : actez la compensation dans l'onglet Caisse pour la consommer définitivement."><div class="label">Brut affecté aux avances (à acter)</div><div class="value">${brutAffecte} DH</div></div>
     <div class="stat-card blue"><div class="label">Brut MINT payé</div><div class="value">${brutPaye} DH</div></div>
     <div class="stat-card amber"><div class="label">dont Avances (payé avant échéance)</div><div class="value">${avances} DH</div></div>
     <div class="stat-card amber"><div class="label">Activation MINT à payer</div><div class="value">${activDu} DH</div></div>
@@ -3931,14 +3998,19 @@ function buildCalendarStats(){
     if(l.type!=='MINT' || !l.vendrediPaiement) return;
     if(l.tempPerdue) return; // introuvable en attente de décision : suspendue, hors calendrier
     const key = l.vendrediPaiementStr;
-    if(!byDay[key]) byDay[key] = {brutDu:0, brutPaye:0, decomCount:0, byAgent:{}};
+    if(!byDay[key]) byDay[key] = {brutDu:0, brutPaye:0, brutAffecte:0, decomCount:0, byAgent:{}};
     const day = byDay[key];
     // badge décommission : refus Qualité du brut et/ou clawback auto de l'activation
     if(l.brutAnnule || l.decommissionne) day.decomCount++;
     if(l.brutAnnule || l.brut===0) return; // le brut n'est jamais dû (refus Qualité ou avant l'agenda)
-    if(!day.byAgent[l.agent]) day.byAgent[l.agent] = {du:0, paye:0};
+    if(!day.byAgent[l.agent]) day.byAgent[l.agent] = {du:0, paye:0, affecte:0};
     if(l.statutPaiementBrut==='Payé'){ day.brutPaye += l.brut; day.byAgent[l.agent].paye += l.brut; }
-    else { day.brutDu += l.brut; day.byAgent[l.agent].du += l.brut; }
+    else {
+      // vue CASH (audit D4) : la part affectée à une avance ne sera pas décaissée ce vendredi-là
+      const aff = brutAffecteAvance(l);
+      day.brutDu += l.brut - aff; day.byAgent[l.agent].du += l.brut - aff;
+      day.brutAffecte += aff;     day.byAgent[l.agent].affecte += aff;
+    }
   });
   return byDay;
 }
@@ -4002,18 +4074,21 @@ function renderCalendarDetail(dateStr){
   document.getElementById('calDetailTitle').innerHTML = `Détail du vendredi <span style="color:var(--mint)">${dateStr}</span>`;
 
   const data = stats ? Object.entries(stats.byAgent).map(([agent,v])=>({
-    Agent: agent, Brut_du: v.du, Brut_paye: v.paye, Total: v.du+v.paye
+    Agent: agent, Brut_du: v.du, Affecte: v.affecte||0, Brut_paye: v.paye, Total: v.du+(v.affecte||0)+v.paye
   })).sort((a,b)=>b.Total-a.Total) : [];
   const totalDu = data.reduce((s,r)=>s+r.Brut_du,0);
+  const totalAffecte = data.reduce((s,r)=>s+r.Affecte,0);
   const totalPaye = data.reduce((s,r)=>s+r.Brut_paye,0);
-  data.push({Agent:'— TOTAL GLOBAL —', Brut_du:totalDu, Brut_paye:totalPaye, Total:totalDu+totalPaye});
+  data.push({Agent:'— TOTAL GLOBAL —', Brut_du:totalDu, Affecte:totalAffecte, Brut_paye:totalPaye, Total:totalDu+totalAffecte+totalPaye});
 
   if(window.tCalDetail) window.tCalDetail.destroy();
   window.tCalDetail = new Tabulator("#table-cal-detail", {
     data, layout:"fitDataStretch", height:Math.min(60+data.length*38,360)+"px",
     columns:[
       {title:"Agent", field:"Agent", widthGrow:2, formatter:c=> c.getValue().startsWith('—') ? `<b>${c.getValue()}</b>` : c.getValue()},
-      {title:"Brut dû (DH)", field:"Brut_du", hozAlign:"right", formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Brut dû CASH (DH)", field:"Brut_du", hozAlign:"right", formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Affecté avance (DH)", field:"Affecte", hozAlign:"right",
+        formatter:c=>c.getValue()>0?`<span class="tag warn" title="Ne sera pas décaissé — bruts affectés au remboursement d'une avance (à acter dans l'onglet Caisse)">${c.getValue()} DH</span>`:'<span style="color:var(--ink-dim)">—</span>'},
       {title:"Brut payé (DH)", field:"Brut_paye", hozAlign:"right", formatter:c=>`<span style="color:#3fd6a4">${c.getValue()} DH</span>`}
     ]
   });
