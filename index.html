@@ -319,6 +319,10 @@
       <div id="table-consoech" class="table-scroll"></div>
     </div>
     <div class="panel">
+      <h2>Échéancier mensuel (15-20) — Net activation &amp; ConsoPilote <span class="sub">— le Net (activation MINT 150 DH) et les tranches ConsoPilote sont payés entre le 15 et le 20 de chaque mois (le Brut, lui, est payé chaque vendredi — voir échéancier ci-dessus). Fenêtres échues et non réglées surlignées en rouge.</span> <button class="btn" id="exportEch1520Btn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
+      <div id="table-ech1520" class="table-scroll"></div>
+    </div>
+    <div class="panel">
       <h2>Détail par contrat <span class="sub">— éditez « Statut Brut », « Statut Activation » et « Refus Qualité » directement dans le tableau. Marquer « Payé » avant le vendredi de paie officiel = avance, automatiquement signalée.</span></h2>
       <div class="legend" style="margin-top:0;margin-bottom:10px">
         <b>Brut</b> = 50 DH par vente MINT, toujours dû (sauf refus Qualité explicite). <b>Activation</b> = 150 DH dès statut « Activé », décommissionnée automatiquement si le statut repasse négatif dans les 3 mois. <b>Net</b> = Brut + Activation − Décommissionnement — c'est le montant réellement dû à l'agent.
@@ -437,6 +441,10 @@
         <button class="btn primary" id="caisseAvanceBtn">Attribuer / mettre à jour l'avance</button>
       </div>
       <div id="table-caisse-avances" class="table-scroll"></div>
+    </div>
+    <div class="panel">
+      <h2>Transactions automatiques <span class="sub">— Brut MINT (50 DH) affecté au remboursement des avances non soldées, contrat par contrat, sur les ventes existantes ET futures, jusqu'au solde de la dette. Le paiement cash du brut est bloqué tant qu'il est affecté. Rapport recalculé automatiquement.</span> <button class="btn" id="exportCaisseAutoTxBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
+      <div id="table-caisse-autotx" class="table-scroll"></div>
     </div>
     <div class="panel">
       <h2>Import du fichier « Avance » <span class="sub">— rapprochement des prénoms courts avec les agents de la base harmonisée ; confirmation obligatoire avant application (aucune attribution automatique)</span> <button class="btn" id="exportCaisseAgentsBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
@@ -1348,6 +1356,9 @@ function autoDetectAndProcess(){
     buildLignes(aBodies, statusMap, statusSources.length > 0);
     harmoniseAgentNames(); // dédoublonnage automatique des noms d'agent (similitude ≥80%)
     renderAll();
+    // charge la caisse (avances) puis re-rend : applique le blocage compensation dès l'analyse, même
+    // avant persistance de la session (la caisse est un registre global indépendant de la session).
+    refreshCaisseCache().then(()=>{ if(rawLignes.length) renderAll(); });
 
     const uniqueA = aSources.map(src => `${src.fileName}:${src.sheetName}`).join(' ; ');
     const crmCount = statusSources.filter(s=>s.type==='crm').length;
@@ -1472,6 +1483,7 @@ function exportTable(table, baseName){
 // panneau, tel qu'affiché à l'écran (filtres actifs + bornage temporel universel inclus)
 document.getElementById('exportSuiviBtn').addEventListener('click', ()=> exportTable(tSuivi, 'sipp_suivi'));
 document.getElementById('exportPayrollBtn').addEventListener('click', ()=> exportTable(window.tPayroll, 'sipp_echeancier_paie'));
+document.getElementById('exportEch1520Btn').addEventListener('click', ()=> exportTable(window.tEch1520, 'sipp_echeancier_mensuel_15_20'));
 document.getElementById('exportKpiBtn').addEventListener('click', ()=> exportTable(tKPI, 'sipp_kpi_agents'));
 document.getElementById('exportAlertesBtn').addEventListener('click', ()=> exportTable(tAlertes, 'sipp_alertes'));
 document.getElementById('exportQualiteBtn').addEventListener('click', ()=> exportTable(tQualite, 'sipp_qualite'));
@@ -1696,6 +1708,9 @@ async function setCurrentSessionId(id){
     // lignes avec des overrides vides et perdrait les éditions faites avant la fermeture de l'onglet.
     const meta = await getSessionMeta(id);
     overrides = (meta && meta.overrides) ? meta.overrides : {};
+    // charge la caisse en cache AVANT le rendu : la compensation avance ↔ brut (et le blocage des
+    // paiements cash en Trésorerie) a besoin de state.avances dès le premier renderAll().
+    await refreshCaisseCache();
     // réapplique l'agenda des règles : les lignes persistées peuvent dater d'avant un changement
     // de règle (ex. brut 50 DH stocké sur des ventes antérieures à son entrée en vigueur)
     applyReglesToLignes(); // inclut renderAll()
@@ -1769,11 +1784,75 @@ async function reconcileCaisseDebits(state){
   return state;
 }
 
+/* ===================== COMPENSATION AVANCE ↔ BRUT MINT (demande Direction 2026-07-16) =====================
+   Règle métier : un agent qui a une AVANCE non soldée (dette envers l'entreprise) ne perçoit PAS en cash
+   le Brut (50 DH) de ses ventes MINT — ce brut est AFFECTÉ automatiquement au remboursement de sa dette,
+   contrat par contrat, dans l'ordre chronologique, sur les ventes EXISTANTES ET FUTURES, jusqu'à extinction
+   de la dette (« jusqu'à ce que l'agent rembourse sa dette »). Une vente à statut négatif (brut annulé
+   qualité, contrat temporairement perdu, ou dont le brut a déjà été payé cash) ne rembourse rien.
+   Conséquences :
+     - le paiement CASH du Brut est BLOQUÉ tant que le contrat est affecté à la dette (colonne Statut Brut
+       de la Trésorerie + action groupée du Calendrier) : le brut ne peut pas à la fois solder la dette ET
+       être versé à l'agent ;
+     - chaque affectation est journalisée dans le rapport « Transactions automatiques » de l'onglet Caisse.
+   Modèle 100% DÉRIVÉ (fonction pure de caisseCache.avances + rawLignes), recalculé à chaque rendu : aucun
+   ledger figé n'est écrit, donc aucune incohérence possible (pas de double comptage, mise à jour immédiate
+   si un statut/brut change). L'avance stockée `avances[agent]` reste la dette d'origine auditable ;
+   « Compensé » et « Dette restante » en sont dérivés. Le SOLDE DE CAISSE n'est pas affecté : une
+   compensation n'est pas un mouvement de trésorerie (aucun cash n'entre ni ne sort — un brut bloqué n'est
+   tout simplement jamais débité via debitCaisseMint). */
+let caisseCache = null;        // dernier état caisse chargé, exposé de façon synchrone au rendu Trésorerie
+let compensationMap = {};      // { lineId: {applied, agent} } — bruts affectés à une dette (bloqués au cash)
+let compensationByAgent = {};  // { agent: {dette, compensation, detteRestante, contrats:[...]} }
+
+function computeAvanceCompensation(){
+  compensationMap = {};
+  compensationByAgent = {};
+  const avances = (caisseCache && caisseCache.avances) ? caisseCache.avances : {};
+  // bruts MINT ENCORE DUS (non payés cash, non annulés qualité, non temporairement perdus), regroupés par agent
+  const parAgent = {};
+  rawLignes.forEach(l=>{
+    if(l.type!=='MINT' || !(l.brut>0) || l.brutAnnule || l.tempPerdue || l.statutPaiementBrut==='Payé') return;
+    (parAgent[l.agent] = parAgent[l.agent] || []).push(l);
+  });
+  Object.keys(avances).forEach(agent=>{
+    const dette = avances[agent] || 0;
+    if(dette<=0) return;
+    const lignes = (parAgent[agent]||[]).slice()
+      .sort((a,b)=>((+toDateSafe(a.dateVente))||0)-((+toDateSafe(b.dateVente))||0)); // chronologique : les plus anciennes ventes remboursent en premier
+    let remaining = dette;
+    const contrats = [];
+    lignes.forEach(l=>{
+      if(remaining<=0) return;
+      const applied = Math.min(l.brut, remaining); // brut = 50 DH ; contrat frontalier partiellement affecté
+      remaining -= applied;
+      compensationMap[l.id] = { applied, agent };
+      contrats.push({ lineId:l.id, contrat:l.contrat, dateVenteStr:l.dateVenteStr, echeanceStr:l.vendrediPaiementStr||l.dateVenteStr, montant:applied, detteApres:remaining });
+    });
+    compensationByAgent[agent] = { dette, compensation:dette-remaining, detteRestante:remaining, contrats };
+  });
+}
+// Un brut affecté (même partiellement) à une dette est bloqué au paiement cash.
+function isBrutBlockedByAvance(id){ return !!(compensationMap[id] && compensationMap[id].applied > 0); }
+// Recharge l'état caisse en cache synchrone puis recalcule la compensation (avances ↔ bruts).
+async function refreshCaisseCache(){
+  try{ caisseCache = await loadCaisseState(); }
+  catch(e){ console.warn('refreshCaisseCache', e); caisseCache = caisseCache || defaultCaisseState(); }
+  computeAvanceCompensation();
+}
+// Après toute mutation de la caisse (injection/avance/import/solde) : recalcul + rafraîchissement du
+// blocage des cellules Brut en Trésorerie, puis re-rendu de l'onglet Caisse.
+async function onCaisseChanged(){
+  await refreshCaisseCache();
+  if(typeof renderFinance === 'function') renderFinance();
+  renderCaisse();
+}
+
 async function renderCaisse(){
   const box = document.getElementById('caisse-summary');
   if(!canEditCaisse()){
     box.innerHTML = `<div class="empty" style="grid-column:1/-1">Accès réservé aux profils Super Admin et Directeur.</div>`;
-    ['table-caisse-mouvements','table-caisse-avances','table-caisse-agents'].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML=''; });
+    ['table-caisse-mouvements','table-caisse-avances','table-caisse-autotx','table-caisse-agents'].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML=''; });
     document.getElementById('caisseInjectionForm').style.display = 'none';
     document.getElementById('caisseAvanceForm').style.display = 'none';
     return;
@@ -1783,14 +1862,23 @@ async function renderCaisse(){
 
   let state = await loadCaisseState();
   state = await reconcileCaisseDebits(state);
+  // synchronise le cache + recalcule la compensation avance ↔ brut sur l'état fraîchement lu
+  caisseCache = state;
+  computeAvanceCompensation();
   const solde = caisseSolde(state);
   const totalAvances = Object.values(state.avances).reduce((s,v)=>s+v,0);
   const totalDebitsMint = state.mintDebits.reduce((s,d)=>s+d.montant,0);
+  // agrégats de compensation (dérivés) : combien des avances est déjà couvert par des bruts affectés,
+  // et combien de dette reste à couvrir par de futures ventes.
+  const totalCompense = Object.values(compensationByAgent).reduce((s,a)=>s+a.compensation,0);
+  const totalDetteRestante = Object.values(compensationByAgent).reduce((s,a)=>s+a.detteRestante,0);
 
   box.innerHTML = `
     <div class="stat-card ${solde>=0?'mint':'red'}"><div class="label">Solde disponible en Caisse</div><div class="value">${solde} DH</div></div>
     <div class="stat-card amber"><div class="label">Total avances attribuées</div><div class="value">${totalAvances} DH</div></div>
     <div class="stat-card blue"><div class="label">Total Brut MINT payé (sorties auto)</div><div class="value">${totalDebitsMint} DH</div></div>
+    <div class="stat-card mint"><div class="label">Avances remboursées par bruts (auto)</div><div class="value">${totalCompense} DH</div></div>
+    <div class="stat-card ${totalDetteRestante>0?'red':'mint'}"><div class="label">Dette restante (à couvrir par ventes futures)</div><div class="value">${totalDetteRestante} DH</div></div>
   `;
 
   // ---- Mouvements (injections + débits auto) ----
@@ -1841,9 +1929,39 @@ async function renderCaisse(){
           st.avanceHistorique.push({date:new Date().toISOString(), agent, ancien:st.avances[agent]||0, nouveau:0, motif:'Soldée manuellement'});
           delete st.avances[agent];
           await saveCaisseState(st);
-          renderCaisse();
+          onCaisseChanged(); // recalcule la compensation + débloque les bruts en Trésorerie
         }
       }
+    ]
+  });
+
+  // ---- Transactions automatiques : bruts affectés au remboursement des avances (dérivé) ----
+  const autoTx = [];
+  Object.keys(compensationByAgent).sort().forEach(agent=>{
+    const info = compensationByAgent[agent];
+    info.contrats.forEach(ct=>{
+      autoTx.push({
+        Agent:agent, Contrat:ct.contrat, DateVente:ct.dateVenteStr, Echeance:ct.echeanceStr,
+        Montant:ct.montant, DetteApres:ct.detteApres,
+        Etat: ct.detteApres>0 ? 'Dette restante' : 'Dette soldée'
+      });
+    });
+  });
+  if(window.tCaisseAutoTx) window.tCaisseAutoTx.destroy();
+  window.tCaisseAutoTx = new Tabulator('#table-caisse-autotx', {
+    data:autoTx, layout:'fitDataStretch', height: autoTx.length?Math.min(80+autoTx.length*36,420)+'px':'80px',
+    placeholder:'Aucune avance non soldée à rembourser — aucun brut affecté pour le moment.',
+    columns:[
+      {title:'Agent', field:'Agent', widthGrow:2},
+      {title:'N° Contrat MINT', field:'Contrat', width:140},
+      {title:'Date de vente', field:'DateVente', width:120},
+      {title:'Échéance brut', field:'Echeance', width:120},
+      {title:'Affecté à la dette (DH)', field:'Montant', hozAlign:'right', width:170,
+        formatter:c=>`<b style="color:#3fd6a4">−${c.getValue()} DH</b>`},
+      {title:'Dette restante après (DH)', field:'DetteApres', hozAlign:'right', width:180,
+        formatter:c=>`<span style="color:${c.getValue()>0?'var(--amber)':'#8ea0bd'}">${c.getValue()} DH</span>`},
+      {title:'État', field:'Etat', width:130,
+        formatter:c=>`<span class="tag ${c.getValue()==='Dette soldée'?'ok':'warn'}">${c.getValue()}</span>`}
     ]
   });
 
@@ -1857,21 +1975,28 @@ async function renderCaisse(){
   agentsDistincts.forEach(a=>{ if(!byAgent[a]) byAgent[a] = {Agent:a, BrutGenere:0, BrutPaye:0}; });
   const recapData = Object.values(byAgent).map(a=>{
     const avance = state.avances[a.Agent]||0;
-    return { Agent:a.Agent, Avances:avance, BrutGenere:a.BrutGenere, BrutPaye:a.BrutPaye,
-      RestantDu: a.BrutGenere - a.BrutPaye - avance };
-  }).filter(a=>a.Avances!==0 || a.BrutGenere!==0).sort((x,y)=>y.RestantDu-x.RestantDu);
+    const comp = compensationByAgent[a.Agent] || {compensation:0, detteRestante:avance};
+    // Reste payable à l'agent en cash = brut généré − brut déjà payé cash − brut affecté à la dette.
+    const restePayable = Math.max(0, a.BrutGenere - a.BrutPaye - comp.compensation);
+    return { Agent:a.Agent, Avances:avance, Compense:comp.compensation, DetteRestante:comp.detteRestante,
+      BrutGenere:a.BrutGenere, BrutPaye:a.BrutPaye, RestePayable:restePayable };
+  }).filter(a=>a.Avances!==0 || a.BrutGenere!==0).sort((x,y)=>y.DetteRestante-x.DetteRestante || y.RestePayable-x.RestePayable);
   if(window.tCaisseAgents) window.tCaisseAgents.destroy();
   window.tCaisseAgents = new Tabulator('#table-caisse-agents', {
     data:recapData, layout:'fitDataStretch', height: recapData.length?Math.min(80+recapData.length*36,420)+'px':'80px',
     placeholder:'Aucune donnée — importez un fichier de ventes.',
     columns:[
       {title:'Agent', field:'Agent', widthGrow:2},
-      {title:'Avances reçues (DH)', field:'Avances', hozAlign:'right', width:150,
+      {title:'Avance reçue (DH)', field:'Avances', hozAlign:'right', width:140,
         formatter:c=>c.getValue()>0?`<span style="color:var(--amber)">${c.getValue()} DH</span>`:'—'},
+      {title:'Remboursé par bruts (DH)', field:'Compense', hozAlign:'right', width:170,
+        formatter:c=>c.getValue()>0?`<span style="color:#3fd6a4">${c.getValue()} DH</span>`:'—'},
+      {title:'Dette restante (DH)', field:'DetteRestante', hozAlign:'right', width:150,
+        formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
       {title:'Brut MINT généré (DH)', field:'BrutGenere', hozAlign:'right', width:160},
-      {title:'Brut MINT payé (DH)', field:'BrutPaye', hozAlign:'right', width:150},
-      {title:'Reste à payer (DH)', field:'RestantDu', hozAlign:'right', width:150,
-        formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`}
+      {title:'Brut MINT payé cash (DH)', field:'BrutPaye', hozAlign:'right', width:170},
+      {title:'Reste payable à l\'agent (DH)', field:'RestePayable', hozAlign:'right', width:180,
+        formatter:c=>`<b style="color:${c.getValue()>0?'#3fd6a4':'#8ea0bd'}">${c.getValue()} DH</b>`}
     ]
   });
 }
@@ -1905,9 +2030,10 @@ document.getElementById('caisseAvanceBtn').addEventListener('click', async ()=>{
   document.getElementById('caisseAvanceMontant').value = '';
   document.getElementById('caisseAvanceMotif').value = '';
   setStatus(`Avance de ${agent} mise à jour : ${ancien} DH → ${montant} DH.`, 'ok');
-  renderCaisse();
+  onCaisseChanged(); // recalcule la compensation + met à jour le blocage des bruts en Trésorerie
 });
 document.getElementById('exportCaisseAgentsBtn').addEventListener('click', ()=> exportTable(window.tCaisseAgents, 'sipp_caisse_recap_agents'));
+document.getElementById('exportCaisseAutoTxBtn').addEventListener('click', ()=> exportTable(window.tCaisseAutoTx, 'sipp_caisse_transactions_auto'));
 
 /* ---- Import du fichier Avance.xlsx (Spéc 3) : suggestion + confirmation obligatoire ---- */
 // heuristique de correspondance « prénom court → agent complet » : les entrées du fichier Avance
@@ -1983,7 +2109,7 @@ document.getElementById('avanceFileInput').addEventListener('change', async func
     document.getElementById('avanceImportReview').style.display = 'none';
     list.innerHTML = ''; window._avanceImportEntries = null;
     setStatus(`${applied} avance(s) appliquée(s) depuis Avance.xlsx.`, 'ok');
-    renderCaisse();
+    onCaisseChanged(); // recalcule la compensation + met à jour le blocage des bruts en Trésorerie
   };
 });
 // Persistance auto (Fonctionnalité 4) : sauvegarde immédiate de la ligne éditée + des overrides de
@@ -2565,6 +2691,9 @@ function renderAll(){
   // "Vérifier règles métier" et les corrections orthographiques d'agents silencieusement
   // inopérants. On resynchronise explicitement à chaque rendu.
   window.rawLignes = rawLignes;
+  // recalcule l'affectation avance ↔ brut MINT (dérivé de caisseCache + rawLignes) AVANT les rendus qui
+  // consomment le blocage (Trésorerie) — pas d'I/O ici, purement synchrone.
+  computeAvanceCompensation();
   renderSuivi();
   renderFinance();
   renderKPI();
@@ -2661,11 +2790,18 @@ function renderFinance(){
         // Règle métier : seule la transition « Non Payé » → « Payé » est autorisée ici. Un contrat
         // Payé est verrouillé (réversion via l'onglet Qualité uniquement) ; les états Conso
         // « En attente / À venir / Perdu » ne sont pas éditables (conditions non réunies).
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()==='Non Payé',
+        // Blocage compensation avance : un brut affecté au remboursement d'une avance non soldée ne peut
+        // pas être payé cash (il solde la dette à la place) — la cellule reste non-éditable jusqu'au solde.
+        editor:"list", editable:cell=>canEditFinance() && cell.getValue()==='Non Payé' && !isBrutBlockedByAvance(cell.getRow().getData().id),
         editorParams:{values:["Non Payé","Payé"]},
         formatter:c=>{
           const v=c.getValue();
+          const r=c.getRow().getData();
           if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
+          if(v==='Non Payé' && isBrutBlockedByAvance(r.id)){
+            const comp = compensationMap[r.id];
+            return `<span class="tag warn" title="Brut affecté au remboursement de l'avance de ${comp.agent} (${comp.applied} DH) — paiement cash bloqué tant que la dette n'est pas soldée. Détail dans l'onglet Caisse › Transactions automatiques.">Affecté avance 🔒</span>`;
+          }
           if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
           if(v==='Payé') return `<span class="tag ok" title="Verrouillé : un paiement ne peut être défait que via l'onglet Suivi Qualité (Annulation Qualité)">${v} 🔒</span>`;
           if(v==='En attente') return `<span class="tag warn" title="Rémunération en attente : statut ≠ Signé ou prélèvement inactif">${v}</span>`;
@@ -2677,6 +2813,13 @@ function renderFinance(){
           const r = cell.getRow().getData();
           if(cell.getValue()!=='Payé' && cell.getValue()!=='Non Payé') return;
           if(r.Type==='MINT'){
+            // garde-fou : un brut affecté à une avance ne doit jamais être payé cash (l'editable le bloque
+            // déjà, ceci couvre tout chemin résiduel) — on annule et on informe.
+            if(cell.getValue()==='Payé' && isBrutBlockedByAvance(r.id)){
+              cell.setValue('Non Payé', true);
+              showError(`Brut affecté au remboursement de l'avance de ${compensationMap[r.id].agent} — paiement cash bloqué jusqu'au solde de la dette.`);
+              return;
+            }
             setOverride(r.id, 'statutPaiementBrut', cell.getValue());
             // à chaque passage "Payé" on horodate au jour du jour ; repasser "Non Payé" efface la date
             if(cell.getValue()==='Payé'){
@@ -2762,6 +2905,95 @@ function renderFinance(){
   renderRegles();
   renderDuParAgent();
   renderConsoEcheancier();
+  renderEcheancier1520();
+}
+
+/* ============================= FENÊTRE DE PAIEMENT MENSUELLE 15-20 (Net activation + ConsoPilote) =============================
+   Cadence de décaissement (demande Direction) : le Brut MINT (50 DH) est payé CHAQUE VENDREDI (échéancier
+   dédié + calendrier de paie), tandis que le NET activation (150 DH) et les tranches ConsoPilote (2×50 DH)
+   sont réglés ENTRE LE 15 ET LE 20 DE CHAQUE MOIS. Cet échéancier projette chaque montant encore dû sur sa
+   fenêtre de paiement 15-20 :
+     - une échéance dont le jour de référence est ≤ 20 tombe dans la fenêtre 15-20 du MÊME mois ;
+     - au-delà du 20, elle bascule sur la fenêtre 15-20 du mois SUIVANT.
+   Références de date : Net activation → date de vente (à défaut d'historique de la date d'activation réelle,
+   limite déjà documentée dans le projet) ; Conso T1 → date d'exigibilité J+45 ; Conso T2 → date des 2 mois
+   clos. N'affiche que les montants NON PAYÉS et NON PERDUS, conditions Conso réunies (les tranches « en
+   attente » restent hors échéancier tant que Signé + prélèvement actif ne sont pas réunis). */
+function paymentWindow1520(refDate){
+  const d = toDateSafe(refDate);
+  if(!d) return null;
+  // jour de référence > 20 → fenêtre du mois suivant ; sinon fenêtre du mois courant
+  const shift = d.getDate() > 20 ? 1 : 0;
+  const y = d.getFullYear(), m = d.getMonth() + shift;
+  const start = new Date(y, m, 15), end = new Date(y, m, 20);
+  const monthLabel = start.toLocaleDateString('fr-FR', {month:'long', year:'numeric'});
+  return { key: `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,'0')}`,
+           label: `15-20 ${monthLabel}`, start, end };
+}
+function renderEcheancier1520(){
+  const cont = document.getElementById('table-ech1520');
+  if(!cont) return;
+  const buckets = {};
+  const bucket = (win)=>{ if(!buckets[win.key]) buckets[win.key] = {Fenetre:win.label, Net:0, Conso:0, Echeances:0, _s:win.start, _end:win.end}; return buckets[win.key]; };
+  let attenteConso = 0, attenteContrats = 0;
+
+  filteredLignes().forEach(l=>{
+    if(l.type==='MINT'){
+      // Net = activation MINT (150 DH) réellement due : contrat activé, non décommissionné, non
+      // temporairement perdu, non encore payé. (Le Brut est hors de cet échéancier — il est payé le vendredi.)
+      if(l.activation>0 && !l.decommissionne && !l.tempPerdue && l.statutPaiementActivation!=='Payé'){
+        const win = paymentWindow1520(l.dateVente);
+        if(win){ const b = bucket(win); b.Net += l.activation; b.Echeances++; }
+      }
+    } else if(l.type==='CONSO'){
+      if(!l.conditionsOK){
+        // tranches non encore payables (statut ≠ Signé ou prélèvement inactif) → hors calendrier daté
+        if(l.statutPaiementT1!=='Payé' && !l.t1Perdue){ attenteConso += l.t1||50; attenteContrats++; }
+        if(l.statutPaiementT2!=='Payé' && !l.t2Perdue){ attenteConso += l.t2||50; }
+        return;
+      }
+      [[l.statutPaiementT1, l.t1Perdue, l.t1Date, l.t1],
+       [l.statutPaiementT2, l.t2Perdue, l.t2Date, l.t2]].forEach(([st, perdue, date, montant])=>{
+        if(st==='Payé' || perdue) return;
+        const win = paymentWindow1520(date);
+        if(win){ const b = bucket(win); b.Conso += (montant||50); b.Echeances++; }
+      });
+    }
+  });
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const rows = Object.values(buckets).sort((a,b)=>a._s-b._s).map(b=>({
+    Fenetre:b.Fenetre, Net:b.Net, Conso:b.Conso, Total:b.Net+b.Conso, Echeances:b.Echeances,
+    _retard: b._end.getTime() < today.getTime()
+  }));
+  if(attenteConso>0) rows.push({Fenetre:'En attente (Conso : statut ≠ Signé ou prélèvement inactif)', Net:0, Conso:attenteConso, Total:attenteConso, Echeances:attenteContrats, _attente:true});
+
+  if(window.tEch1520) window.tEch1520.destroy();
+  window.tEch1520 = new Tabulator(cont, {
+    data:rows, layout:"fitDataStretch", height:rows.length?Math.min(60+rows.length*36,340)+"px":"80px",
+    placeholder:"Aucune échéance Net/Conso 15-20 en attente.",
+    rowFormatter:row=>{
+      const d = row.getData();
+      if(d._retard && d.Total>0){
+        row.getElement().style.boxShadow = 'inset 3px 0 0 var(--red)';
+        row.getElement().title = 'Fenêtre de paiement 15-20 dépassée — Net/Conso en retard';
+      }
+    },
+    columns:[
+      {title:"Fenêtre de paiement", field:"Fenetre", widthGrow:2, formatter:c=>{
+        const r=c.getRow().getData(); const v=c.getValue();
+        if(r._attente) return `<span style="color:var(--amber)">${v}</span>`;
+        return r._retard ? `<b style="color:var(--red)">${v} — en retard</b>` : v.replace(/^(15-20) (.)/, (m,a,b)=>a+' '+b.toUpperCase());
+      }},
+      {title:"Net activation (DH)", field:"Net", hozAlign:"right", width:150,
+        formatter:c=>c.getValue()>0?`<span>${c.getValue()} DH</span>`:'—'},
+      {title:"ConsoPilote (DH)", field:"Conso", hozAlign:"right", width:150,
+        formatter:c=>c.getValue()>0?`<span>${c.getValue()} DH</span>`:'—'},
+      {title:"Total fenêtre (DH)", field:"Total", hozAlign:"right", width:150,
+        formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Échéances", field:"Echeances", hozAlign:"center", width:100}
+    ]
+  });
 }
 
 /* ---- Agenda des règles financières (affichage + édition de la date d'entrée en vigueur du brut) ---- */
@@ -3703,7 +3935,7 @@ function renderCalendarDetail(dateStr){
 
 function bulkSetFriday(dateStr, value){
   if(!canEditFinance()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
-  let locked = 0;
+  let locked = 0, avanceBloques = 0;
   rawLignes.forEach(l=>{
     if(l.type==='MINT' && l.vendrediPaiementStr===dateStr && !l.brutAnnule){
       // règle d'agenda : pas de brut dû (vente antérieure à l'entrée en vigueur) → rien à marquer
@@ -3711,6 +3943,9 @@ function bulkSetFriday(dateStr, value){
       // Même règle métier que la colonne Statut Brut de l'onglet Trésorerie : un contrat déjà
       // Payé ne peut pas être repassé Non Payé en masse — seul l'onglet Qualité peut défaire un paiement.
       if(value==='Non Payé' && l.statutPaiementBrut==='Payé'){ locked++; return; }
+      // Blocage compensation avance : un brut affecté au remboursement d'une avance non soldée ne peut
+      // pas être payé cash en masse (il solde la dette à la place) — même règle que la cellule Trésorerie.
+      if(value==='Payé' && isBrutBlockedByAvance(l.id)){ avanceBloques++; return; }
       setOverride(l.id, 'statutPaiementBrut', value);
       setOverride(l.id, 'datePaiementBrut', value==='Payé' ? fmtDate(new Date()) : null);
       if(value==='Payé') debitCaisseMint(l); // Spéc 2.2 : sortie automatique Caisse
@@ -3721,6 +3956,7 @@ function bulkSetFriday(dateStr, value){
   renderCalendar();
   renderCalendarDetail(dateStr);
   if(locked>0) showError(`${locked} contrat(s) déjà Payé n'ont pas été réinitialisés — passez par l'onglet Suivi Qualité pour défaire un paiement.`);
+  if(avanceBloques>0) showError(`${avanceBloques} contrat(s) non payés : leur Brut est affecté au remboursement d'une avance non soldée (voir onglet Caisse › Transactions automatiques).`);
   const today = new Date();
   const dueDate = parseDate(dateStr);
   const isEarly = value==='Payé' && dueDate && today < dueDate;
