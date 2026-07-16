@@ -286,6 +286,7 @@
   <button class="navbtn" data-tab="negatif">Négatif Financier</button>
   <button class="navbtn" data-tab="bordereau">Bordereau Mensuel</button>
   <button class="navbtn" data-tab="caisse">Caisse</button>
+  <button class="navbtn" data-tab="identification">Identification ConsoPilote</button>
   <button class="navbtn" data-tab="mesventes">Mes Ventes</button>
 </div>
 
@@ -465,6 +466,21 @@
     <div class="panel">
       <h2>Récapitulatif par agent <span class="sub">— avances reçues, brut Mint généré (session en cours), reste à payer</span></h2>
       <div id="table-caisse-agents" class="table-scroll"></div>
+    </div>
+  </div>
+
+  <div class="tab" id="tab-identification">
+    <div class="panel">
+      <h2>Identification ConsoPilote — fiabilité de l'attribution agent
+        <span class="sub">— constat d'audit (2026-07-16) : le moteur de commissionnement ne crée une ligne ConsoPilote que si un contrat est également référencé dans une vente MINT (Feuil1) ; une vente ConsoPilote sans ce lien n'apparaît donc nulle part ailleurs dans l'application. Cet onglet affiche les 100% des ventes ConsoPilote importées et signale, pour chacune, si l'agent peut être confirmé par recoupement (Feuil1 + Feuil2 concordants) ou seulement déclaré par une source unique — non affecté par le filtre de période (audit exhaustif).</span>
+        <button class="btn" id="exportIdentificationBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button>
+      </h2>
+      <div class="summary-grid" id="identification-summary"></div>
+      <div class="legend" style="margin-top:10px;margin-bottom:10px">
+        <b>Méthode</b> : pour chaque vente ConsoPilote, le n° de contrat est recherché dans la colonne « Numéro Contrat ConsoPilote » de Feuil1 (ventes MINT), qui porte l'agent au moment de la vente d'origine.
+        <b>Confirmé</b> = contrat retrouvé et agent concordant entre les deux sources. <b>Non recoupé</b> = contrat absent de Feuil1 — l'agent déclaré par la feuille ConsoPilote est conservé comme meilleure estimation, avec le commentaire « agent propriétaire non identifié ». <b>Conflit</b> = contrat retrouvé mais agents discordants entre les deux sources.
+      </div>
+      <div id="table-identification" class="table-scroll"></div>
     </div>
   </div>
 
@@ -665,8 +681,8 @@ const ROLE_LABELS = {
 const PERM = {
   // caisseAdmin : Spécification 2.1 — Super Admin ET Directeur UNIQUEMENT peuvent accéder à la Caisse,
   // ajuster le solde, attribuer/modifier des avances. Aucun autre rôle (y compris Qualité) n'y a accès.
-  superadmin: {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau','caisse'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:true,  caisseAdmin:true},
-  directeur:  {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau','caisse'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:false, caisseAdmin:true},
+  superadmin: {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau','caisse','identification'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:true,  caisseAdmin:true},
+  directeur:  {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau','caisse','identification'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:false, caisseAdmin:true},
   associes:   {tabs:['finance','calendrier'],                                   editFinance:false, editQuality:false, manageState:false, defaultTab:'finance', superUser:false, caisseAdmin:false},
   qualite:    {tabs:['qualite','alertes'],                                      editFinance:false, editQuality:true,  manageState:true,  defaultTab:'qualite', superUser:false, caisseAdmin:false},
   agent:      {tabs:['mesventes'],                                              editFinance:false, editQuality:false, manageState:false, defaultTab:'mesventes', superUser:false, caisseAdmin:false}
@@ -751,7 +767,7 @@ async function doLogin(){
 function doLogout(reason){
   currentRole = null; currentAgentName = null; selectedRole = null;
   // purge des données sensibles chargées en mémoire pour cette session
-  rawLignes = []; overrides = {};
+  rawLignes = []; overrides = {}; consoIdentification = [];
   window.rawLignes = rawLignes; // garde window.rawLignes synchronisé (voir renderAll)
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('loginOverlay').style.display = 'flex';
@@ -872,6 +888,7 @@ document.querySelectorAll('.navbtn').forEach(b=>{
     if(b.dataset.tab==='negatif' && rawLignes.length) renderNegatifFinancier();
     if(b.dataset.tab==='bordereau' && rawLignes.length) renderBordereau();
     if(b.dataset.tab==='caisse') renderCaisse();
+    if(b.dataset.tab==='identification') renderIdentificationConsopilote();
   });
 });
 function setStatus(msg, kind, badge){
@@ -992,6 +1009,7 @@ document.getElementById('importOverwriteBtn').addEventListener('click', async ()
     workbooks = pendingWorkbooks; pendingWorkbooks = null;
     autoDetectAndProcess();
     const report = await persistUpsert(sess);
+    await persistConsoIdentification(sess);
     document.getElementById('importSummaryContent').textContent = JSON.stringify(report,null,2);
     showImportSummaryModal();
     setStatus(`Session écrasée (${sess}) — ${report.added} ligne(s) ré-importée(s).`, 'ok');
@@ -1006,6 +1024,7 @@ document.getElementById('importNewBtn').addEventListener('click', async ()=>{
   workbooks = pendingWorkbooks; pendingWorkbooks = null;
   try{ autoDetectAndProcess();
     const report = await persistUpsert(sess);
+    await persistConsoIdentification(sess);
     document.getElementById('importSummaryContent').textContent = JSON.stringify(report,null,2);
     showImportSummaryModal();
     setStatus(`Nouvelle session créée (${sess}) — ${report.added} ajoutées, ${report.updated} mises à jour, ${report.ignored} ignorées.`, 'ok');
@@ -1358,6 +1377,7 @@ function autoDetectAndProcess(){
     }));
     buildLignes(aBodies, statusMap, statusSources.length > 0);
     harmoniseAgentNames(); // dédoublonnage automatique des noms d'agent (similitude ≥80%)
+    buildConsoIdentification(aBodies, statusSources); // audit fiabilité agent ConsoPilote (100% des ventes, indépendant de rawLignes)
     renderAll();
     // charge la caisse (avances) puis re-rend : applique le blocage compensation dès l'analyse, même
     // avant persistance de la session (la caisse est un registre global indépendant de la session).
@@ -1713,6 +1733,10 @@ async function setCurrentSessionId(id){
     // lignes avec des overrides vides et perdrait les éditions faites avant la fermeture de l'onglet.
     const meta = await getSessionMeta(id);
     overrides = (meta && meta.overrides) ? meta.overrides : {};
+    // restaure l'audit d'identification ConsoPilote : les 16 ventes « non recoupées » n'ont pas de
+    // ligne dans rawLignes/lignes (voir buildConsoIdentification) — sans ceci, elles disparaîtraient
+    // de cet onglet à la réouverture de la session, uniquement récupérables via un nouvel import.
+    consoIdentification = (meta && meta.consoIdentification) ? meta.consoIdentification : [];
     // charge la caisse en cache AVANT le rendu : la compensation avance ↔ brut (et le blocage des
     // paiements cash en Trésorerie) a besoin de state.avances dès le premier renderAll().
     await refreshCaisseCache();
@@ -2097,6 +2121,58 @@ async function renderCaisse(){
   });
 }
 
+/* ---- Identification ConsoPilote : audit de fiabilité de l'attribution agent (2026-07-16) ----
+   Table purement dérivée de `consoIdentification` (voir buildConsoIdentification) — aucune écriture,
+   aucune interaction avec le moteur de commissionnement. Non filtrée par période : objectif d'audit
+   exhaustif (100% des ventes ConsoPilote importées, y compris celles sans ligne Feuil1 correspondante). */
+function renderIdentificationConsopilote(){
+  const box = document.getElementById('identification-summary');
+  if(!box) return;
+  const total = consoIdentification.length;
+  const confirmees = consoIdentification.filter(r=>r.fiabilite.startsWith('Confirmé')).length;
+  const conflits = consoIdentification.filter(r=>r.fiabilite.startsWith('Conflit')).length;
+  const nonRecoupees = consoIdentification.filter(r=>r.commentaire==='agent propriétaire non identifié').length;
+  box.innerHTML = `
+    <div class="stat-card blue"><div class="label">Total ventes ConsoPilote (Feuil2)</div><div class="value">${total}</div></div>
+    <div class="stat-card mint"><div class="label">Confirmées (Feuil1 + Feuil2 concordants)</div><div class="value">${confirmees}</div></div>
+    <div class="stat-card ${conflits>0?'red':'mint'}"><div class="label">Conflits (sources discordantes)</div><div class="value">${conflits}</div></div>
+    <div class="stat-card amber"><div class="label">Non recoupées (commentaire ajouté)</div><div class="value">${nonRecoupees}</div></div>
+  `;
+
+  const data = consoIdentification.map(r=>({
+    Contrat:r.contrat, Client:r.client, Telephone:r.telephone, Statut:r.statut, Prelevement:r.prelevement,
+    Agent_Feuil2:r.agentFeuil2, Agent_Feuil1:r.agentFeuil1, Agent_Retenu:r.agentRetenu,
+    Fiabilite:r.fiabilite, Commentaire:r.commentaire,
+    Contrat_Energie_Lie:r.contratEnergieLie, Date_Vente_Liee:r.dateVenteLiee
+  }));
+  if(window.tIdentification) window.tIdentification.destroy();
+  window.tIdentification = new Tabulator('#table-identification', {
+    data, layout:'fitDataStretch', height: data.length?Math.min(80+data.length*36,520)+'px':'80px',
+    placeholder:'Aucune vente ConsoPilote détectée — importez un fichier.',
+    columns:[
+      {title:'N° Contrat ConsoPilote', field:'Contrat', width:150},
+      {title:'Client', field:'Client', widthGrow:2},
+      {title:'Téléphone', field:'Telephone', width:130},
+      {title:'Statut', field:'Statut', width:90},
+      {title:'Prélèvement', field:'Prelevement', width:100},
+      {title:'Agent (source ConsoPilote)', field:'Agent_Feuil2', width:190},
+      {title:'Agent (source MINT croisée)', field:'Agent_Feuil1', width:190},
+      {title:'Agent retenu', field:'Agent_Retenu', width:190, formatter:c=>`<b>${c.getValue()}</b>`},
+      {title:'Fiabilité', field:'Fiabilite', widthGrow:2, formatter:c=>{
+        const v=c.getValue();
+        const cls = v.startsWith('Confirmé') ? 'ok' : (v.startsWith('Conflit') ? 'bad' : 'warn');
+        return `<span class="tag ${cls}" title="${v}">${v}</span>`;
+      }},
+      {title:'Commentaire', field:'Commentaire', width:230, formatter:c=>{
+        const v=c.getValue();
+        return v ? `<b style="color:#0000CC">${v}</b>` : '';
+      }},
+      {title:'N° Contrat Énergie lié', field:'Contrat_Energie_Lie', width:160},
+      {title:'Date de vente liée (MINT)', field:'Date_Vente_Liee', width:170}
+    ]
+  });
+}
+
 /* ---- Formulaires Caisse : injection de fonds & attribution d'avance ---- */
 document.getElementById('caisseInjectBtn').addEventListener('click', async ()=>{
   if(!canEditCaisse()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
@@ -2130,6 +2206,7 @@ document.getElementById('caisseAvanceBtn').addEventListener('click', async ()=>{
 });
 document.getElementById('exportCaisseAgentsBtn').addEventListener('click', ()=> exportTable(window.tCaisseAgents, 'sipp_caisse_recap_agents'));
 document.getElementById('exportCaisseAutoTxBtn').addEventListener('click', ()=> exportTable(window.tCaisseAutoTx, 'sipp_caisse_transactions_auto'));
+document.getElementById('exportIdentificationBtn').addEventListener('click', ()=> exportTable(window.tIdentification, 'ConsoPilote_Ventes_Agents_Fusionnees'));
 
 /* ---- Sauvegarde / restauration de l'état de la Caisse (correctif audit R3) ----
    La caisse ne vit que dans l'IndexedDB d'UN navigateur : un nettoyage des données de navigation ou
@@ -2818,6 +2895,130 @@ function buildLignes(aSources, statusMap, hasCRM){
       sourceInfo: item.sources.join(' ; ')
     }, fields));
   });
+}
+
+/* ============================= IDENTIFICATION CONSOPILOTE (audit fiabilité agent, 2026-07-16) =============================
+   Constat d'audit : ci-dessus, `consoGroups` (donc les lignes CONSO de `rawLignes`) n'est alimenté QUE par les
+   ventes ConsoPilote dont le n° de contrat est AUSSI présent dans une ligne Feuil1 (colonne « Numéro Contrat
+   ConsoPilote »). Une vente ConsoPilote de Feuil2 sans ligne Feuil1 correspondante n'entre donc JAMAIS dans
+   rawLignes — invisible dans Trésorerie/KPI/Mes Ventes. Cette fonction est VOLONTAIREMENT indépendante du
+   moteur de commissionnement ci-dessus (ne modifie ni rawLignes ni consoGroups) : elle réexamine directement
+   les sources brutes pour faire apparaître 100% des ventes ConsoPilote et documenter, pour chacune, si l'agent
+   peut être confirmé par recoupement Feuil1↔Feuil2 (source la plus fiable, liée à la vente d'origine) ou
+   seulement déclaré par la feuille ConsoPilote seule (non recoupé). Méthodologie identique au fichier d'audit
+   livré le 2026-07-16 (ConsoPilote_Ventes_Agents_Fusionnees), reproduite ici pour un contrôle continu à chaque
+   import plutôt qu'un export ponctuel. Réutilise normalizeName() (compare_expected.js) pour la comparaison des
+   noms d'agent — gère déjà correctement les espaces insécables ( ) qui provoquaient de faux conflits lors
+   d'une comparaison texte brute (piège identifié lors de l'audit). */
+let consoIdentification = [];
+function buildConsoIdentification(aBodies, statusSourcesRaw){
+  consoIdentification = [];
+  // 1. table Feuil1 : n° contrat ConsoPilote -> {agent, dateVenteStr, contratEnergie, client} (source la plus fiable)
+  const f1Map = {};
+  (aBodies||[]).forEach(src=>{
+    const cA = {
+      dateVente: colIndexByNames(src.header, ['Date de Vente']),
+      contratEnergie: colIndexByNames(src.header, ['Numéro Contrat Energie','Numero Contrat Energie','Numero contrat Energie']),
+      nomClient: colIndexByNames(src.header, ['Nom du Client']),
+      prenomClient: colIndexByNames(src.header, ['Prénom du Client','Prenom du Client']),
+      commercial: colIndexByNames(src.header, ['Nom du Commercial','Nom du commercial']),
+      contratConso: colIndexByNames(src.header, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote'])
+    };
+    if(cA.contratConso===-1) return;
+    (src.rows||[]).forEach(row=>{
+      if(!row) return;
+      if(isEmptyConso(row[cA.contratConso])) return;
+      const refConso = normalizeRef(row[cA.contratConso]);
+      if(!refConso) return;
+      const agent = (row[cA.commercial]||'').toString().trim();
+      const dateVente = cA.dateVente!==-1 ? parseDate(row[cA.dateVente]) : null;
+      const client = [cA.nomClient!==-1?row[cA.nomClient]:'', cA.prenomClient!==-1?row[cA.prenomClient]:''].filter(Boolean).join(' ').trim();
+      const contratEnergie = cA.contratEnergie!==-1 ? extractContractNumbers(row[cA.contratEnergie]).join(' / ') : '';
+      const existing = f1Map[refConso] || {agent:'', dateVenteStr:'', contratEnergie:'', client:''};
+      f1Map[refConso] = {
+        agent: mergeStringField(existing.agent, agent),
+        dateVenteStr: existing.dateVenteStr || (dateVente ? fmtDate(dateVente) : ''),
+        contratEnergie: mergeStringField(existing.contratEnergie, contratEnergie),
+        client: mergeStringField(existing.client, client)
+      };
+    });
+  });
+
+  // 2. toutes les ventes ConsoPilote (Feuil2), qu'une ligne Feuil1 existe ou non
+  const seen = {};
+  (statusSourcesRaw||[]).filter(s=>s.type==='feuil2').forEach(src=>{
+    const header = src.header;
+    const cB = {
+      ref: colIndexByNames(header, ['numero contract','numero de contrat','numéro contract','numéro de contrat']),
+      client: colIndexByNames(header, ['nom']),
+      tel: colIndexByNames(header, ['telephone','téléphone']),
+      etat: colIndexByNames(header, ['statut','statut de vente','etat']),
+      prelev: colIndexByNames(header, ['prelevement','prelevment','prélèvement']),
+      commercial: colIndexByNames(header, ['nom du commercial','nom du c omercial','nom commercial'])
+    };
+    if(cB.ref===-1) return;
+    (src.rows||[]).slice(src.idx+1).forEach(row=>{
+      if(!row) return;
+      const ref = normalizeRef(row[cB.ref]);
+      if(!ref) return;
+      const client = cB.client!==-1 ? (row[cB.client]||'').toString().trim() : '';
+      const tel = cB.tel!==-1 ? (row[cB.tel]||'').toString().trim() : '';
+      const statut = cB.etat!==-1 ? (row[cB.etat]||'').toString().trim() : '';
+      const prelev = cB.prelev!==-1 ? (row[cB.prelev]||'').toString().trim() : '';
+      const agentF2 = cB.commercial!==-1 ? (row[cB.commercial]||'').toString().trim() : '';
+      if(!client && !agentF2) return; // ligne vide en fin de feuille
+      seen[ref] = {ref, client, tel, statut, prelev, agentF2}; // en cas de doublon multi-fichiers, le dernier import gagne
+    });
+  });
+
+  // 3. croisement + verdict de fiabilité (identique à l'audit du 2026-07-16)
+  Object.values(seen).forEach(row=>{
+    const f1 = f1Map[row.ref];
+    const nF2 = normalizeName(row.agentF2);
+    let fiabilite, commentaire, agentRetenu;
+    if(f1 && f1.agent){
+      const nF1 = normalizeName(f1.agent);
+      if(nF1 && nF1===nF2){
+        fiabilite = 'Confirmé (Feuil1 + Feuil2 concordants)';
+        commentaire = '';
+        agentRetenu = f1.agent;
+      } else {
+        fiabilite = `Conflit (Feuil1="${f1.agent}" vs Feuil2="${row.agentF2}")`;
+        commentaire = 'agent propriétaire non identifié';
+        agentRetenu = row.agentF2 || f1.agent;
+      }
+    } else {
+      fiabilite = 'Non recoupé (source unique ConsoPilote)';
+      commentaire = 'agent propriétaire non identifié';
+      agentRetenu = row.agentF2 || '(agent non renseigné)';
+    }
+    consoIdentification.push({
+      contrat: row.ref, client: row.client, telephone: row.tel, statut: row.statut, prelevement: row.prelev,
+      agentFeuil2: row.agentF2 || '—', agentFeuil1: (f1 && f1.agent) ? f1.agent : '—',
+      agentRetenu, fiabilite, commentaire,
+      contratEnergieLie: (f1 && f1.contratEnergie) ? f1.contratEnergie : '—',
+      dateVenteLiee: (f1 && f1.dateVenteStr) ? f1.dateVenteStr : '—'
+    });
+  });
+  consoIdentification.sort((a,b)=> (a.contrat||'').localeCompare(b.contrat||''));
+}
+async function persistConsoIdentification(sessionId){
+  if(!sessionId || !sippDB) return;
+  try{
+    await new Promise((resolve,reject)=>{
+      const tx = sippDB.transaction(['sessions'],'readwrite');
+      const store = tx.objectStore('sessions');
+      const getReq = store.get(sessionId);
+      getReq.onsuccess = ()=>{
+        const meta = getReq.result || {id:sessionId, name:'Session '+sessionId, createdAt:new Date().toISOString(), createdBy:currentRole||'unknown'};
+        meta.consoIdentification = consoIdentification;
+        store.put(meta);
+      };
+      getReq.onerror = ()=> reject(getReq.error);
+      tx.oncomplete = ()=> resolve(true);
+      tx.onerror = ()=> reject(tx.error);
+    });
+  }catch(e){ console.warn('persistConsoIdentification échoué', e); }
 }
 
 /* ============================= RENDU TABLES ============================= */

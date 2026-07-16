@@ -16,7 +16,8 @@
    Fonctions sources dans index.html : norm, parsePaymentFlag, computeMintClawback,
    paymentWindow1520, computeAvanceCompensation, isBrutBlockedByAvance, brutAffecteAvance,
    acterCompensation (cœur décisionnel), renderPayroll / renderDuParAgent / renderFinanceSummary
-   (agrégations cash), validation de restauration caisse.
+   (agrégations cash), validation de restauration caisse, buildConsoIdentification (audit
+   fiabilité agent ConsoPilote, onglet Identification ConsoPilote).
    ============================================================================================ */
 (function(){
 'use strict';
@@ -167,6 +168,111 @@ function summaryAgg(lignes, todayMid){
 function isValidCaisseBackup(obj){
   return !!(obj && obj.id==='main' && Array.isArray(obj.injections) && Array.isArray(obj.mintDebits)
     && typeof obj.avances==='object' && !Array.isArray(obj.avances));
+}
+// normalizeName : source compare_expected.js (chargé sur la même page qu'index.html), réutilisé
+// pour la comparaison des noms d'agent — gère espaces insécables (nbsp), casse, accents.
+function normalizeName(s){
+  if(s==null) return '';
+  return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9\s\-\.']/g,'').replace(/\s+/g,' ').trim();
+}
+function colIndexByNames(header, names){
+  for(const name of names){ const target = norm(name); for(let i=0;i<header.length;i++){ if(norm(header[i]) === target) return i; } }
+  for(const name of names){ const target = norm(name); for(let i=0;i<header.length;i++){ const h = norm(header[i]); if(h && target && (h.startsWith(target) || target.startsWith(h))) return i; } }
+  return -1;
+}
+function normalizeRef(ref){ if(ref===null||ref===undefined) return ''; const s = String(ref).replace(/\D/g,''); return s || ''; }
+function isEmptyConso(v){ if(v===null||v===undefined) return true; const s=String(v).trim(); return s==='' || s==='0' || s==='*'; }
+function extractContractNumbers(val){ if(val===null||val===undefined) return []; return String(val).split(/[\/,;]/).map(s=>s.replace(/\D/g,'')).filter(Boolean); }
+function fmtDate(d){ return d ? d.toLocaleDateString('fr-FR') : ''; }
+function mergeStringField(existing, candidate){
+  if(!existing) return candidate || '';
+  if(!candidate) return existing;
+  if(existing === candidate) return existing;
+  if(existing.includes(candidate)) return existing;
+  if(candidate.includes(existing)) return candidate;
+  return `${existing} / ${candidate}`;
+}
+// buildConsoIdentification : audit fiabilité agent ConsoPilote (onglet Identification ConsoPilote).
+let consoIdentification = [];
+function buildConsoIdentification(aBodies, statusSourcesRaw){
+  consoIdentification = [];
+  const f1Map = {};
+  (aBodies||[]).forEach(src=>{
+    const cA = {
+      dateVente: colIndexByNames(src.header, ['Date de Vente']),
+      contratEnergie: colIndexByNames(src.header, ['Numéro Contrat Energie','Numero Contrat Energie','Numero contrat Energie']),
+      nomClient: colIndexByNames(src.header, ['Nom du Client']),
+      prenomClient: colIndexByNames(src.header, ['Prénom du Client','Prenom du Client']),
+      commercial: colIndexByNames(src.header, ['Nom du Commercial','Nom du commercial']),
+      contratConso: colIndexByNames(src.header, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote'])
+    };
+    if(cA.contratConso===-1) return;
+    (src.rows||[]).forEach(row=>{
+      if(!row) return;
+      if(isEmptyConso(row[cA.contratConso])) return;
+      const refConso = normalizeRef(row[cA.contratConso]);
+      if(!refConso) return;
+      const agent = (row[cA.commercial]||'').toString().trim();
+      const dateVente = cA.dateVente!==-1 ? toDateSafe(row[cA.dateVente]) : null;
+      const client = [cA.nomClient!==-1?row[cA.nomClient]:'', cA.prenomClient!==-1?row[cA.prenomClient]:''].filter(Boolean).join(' ').trim();
+      const contratEnergie = cA.contratEnergie!==-1 ? extractContractNumbers(row[cA.contratEnergie]).join(' / ') : '';
+      const existing = f1Map[refConso] || {agent:'', dateVenteStr:'', contratEnergie:'', client:''};
+      f1Map[refConso] = {
+        agent: mergeStringField(existing.agent, agent),
+        dateVenteStr: existing.dateVenteStr || (dateVente ? fmtDate(dateVente) : ''),
+        contratEnergie: mergeStringField(existing.contratEnergie, contratEnergie),
+        client: mergeStringField(existing.client, client)
+      };
+    });
+  });
+  const seen = {};
+  (statusSourcesRaw||[]).filter(s=>s.type==='feuil2').forEach(src=>{
+    const header = src.header;
+    const cB = {
+      ref: colIndexByNames(header, ['numero contract','numero de contrat','numéro contract','numéro de contrat']),
+      client: colIndexByNames(header, ['nom']),
+      tel: colIndexByNames(header, ['telephone','téléphone']),
+      etat: colIndexByNames(header, ['statut','statut de vente','etat']),
+      prelev: colIndexByNames(header, ['prelevement','prelevment','prélèvement']),
+      commercial: colIndexByNames(header, ['nom du commercial','nom du c omercial','nom commercial'])
+    };
+    if(cB.ref===-1) return;
+    (src.rows||[]).slice(src.idx+1).forEach(row=>{
+      if(!row) return;
+      const ref = normalizeRef(row[cB.ref]);
+      if(!ref) return;
+      const client = cB.client!==-1 ? (row[cB.client]||'').toString().trim() : '';
+      const tel = cB.tel!==-1 ? (row[cB.tel]||'').toString().trim() : '';
+      const statut = cB.etat!==-1 ? (row[cB.etat]||'').toString().trim() : '';
+      const prelev = cB.prelev!==-1 ? (row[cB.prelev]||'').toString().trim() : '';
+      const agentF2 = cB.commercial!==-1 ? (row[cB.commercial]||'').toString().trim() : '';
+      if(!client && !agentF2) return;
+      seen[ref] = {ref, client, tel, statut, prelev, agentF2};
+    });
+  });
+  Object.values(seen).forEach(row=>{
+    const f1 = f1Map[row.ref];
+    const nF2 = normalizeName(row.agentF2);
+    let fiabilite, commentaire, agentRetenu;
+    if(f1 && f1.agent){
+      const nF1 = normalizeName(f1.agent);
+      if(nF1 && nF1===nF2){
+        fiabilite = 'Confirmé (Feuil1 + Feuil2 concordants)'; commentaire = ''; agentRetenu = f1.agent;
+      } else {
+        fiabilite = `Conflit (Feuil1="${f1.agent}" vs Feuil2="${row.agentF2}")`; commentaire = 'agent propriétaire non identifié'; agentRetenu = row.agentF2 || f1.agent;
+      }
+    } else {
+      fiabilite = 'Non recoupé (source unique ConsoPilote)'; commentaire = 'agent propriétaire non identifié'; agentRetenu = row.agentF2 || '(agent non renseigné)';
+    }
+    consoIdentification.push({
+      contrat: row.ref, client: row.client, telephone: row.tel, statut: row.statut, prelevement: row.prelev,
+      agentFeuil2: row.agentF2 || '—', agentFeuil1: (f1 && f1.agent) ? f1.agent : '—',
+      agentRetenu, fiabilite, commentaire,
+      contratEnergieLie: (f1 && f1.contratEnergie) ? f1.contratEnergie : '—',
+      dateVenteLiee: (f1 && f1.dateVenteStr) ? f1.dateVenteStr : '—'
+    });
+  });
+  consoIdentification.sort((a,b)=> (a.contrat||'').localeCompare(b.contrat||''));
 }
 
 /* ===================== CADRE DE TEST ===================== */
@@ -338,6 +444,40 @@ sec('S7 · parsePaymentFlag — négation explicite toujours prioritaire');
   eq('« Réglée » → payé', parsePaymentFlag('Réglée'), true);
   eq('« 1 » → payé / « 0 » → non', [parsePaymentFlag('1'),parsePaymentFlag('0')], [true,false]);
   eq('null / vide → NON payé', [parsePaymentFlag(null),parsePaymentFlag('')], [false,false]);
+})();
+
+/* ===================== S8 — Identification ConsoPilote (audit fiabilité agent) ===================== */
+sec('S8 · buildConsoIdentification — 100% des ventes ConsoPilote, fiabilité par recoupement Feuil1↔Feuil2');
+(function(){
+  const NBSP = String.fromCharCode(160);
+  const headerA = ['Date de Vente','Numéro Contrat Energie','Nom du Client','Prénom du Client','Nom du Commercial','Numéro Contrat ConsoPilote'];
+  const rowsA = [
+    [new Date(2026,5,11), '1805322','Khan','Umar','Mouad'+NBSP+'ELBRAHMI','213145'],
+    [new Date(2026,5,23), '1810989','bassoung','julienne','Yassir Bouhdadi','220711'],
+    [new Date(2026,5,20), '1899999','SansLien','Client','Quelqu Un','0'] // contrat conso='0' -> isEmptyConso, doit être ignoré
+  ];
+  const aBodies = [{ header: headerA, rows: rowsA, fileName:'tableau statut brut (2).xlsx', sheetName:'Feuil1' }];
+
+  const headerF2 = ['nom ','telephone','numero contract','statut','prelevement','nom du c omercial'];
+  const rowsF2 = [
+    ['Umar Khan','06 28 07 99 38','213145','signé','actif','Mouad'+NBSP+'ELBRAHMI'], // nbsp des 2 côtés -> doit rester Confirmé
+    ['Werrad Sekrane','06 07 09 95 34','213815','signé','actif','Oussama Hmamou'],    // aucun lien Feuil1 -> Non recoupé
+    ['Julienne Mbaibassoug','06 02 93 93 82','220711','signé','actif','Yassir Bouhdadi'] // Confirmé + traçabilité liée
+  ];
+  const statusSourcesRaw = [{ type:'feuil2', fileName:'tableau statut brut.xlsx', sheetName:'Feuil2', idx:0, rows:[headerF2,...rowsF2], header:headerF2 }];
+
+  buildConsoIdentification(aBodies, statusSourcesRaw);
+
+  eq('3 ventes ConsoPilote capturées (même sans ligne Feuil1)', consoIdentification.length, 3);
+  const r213145 = consoIdentification.find(r=>r.contrat==='213145');
+  eq('nbsp des 2 côtés -> Confirmé (pas de faux conflit)', r213145.fiabilite.startsWith('Confirmé'), true);
+  eq('confirmée -> commentaire vide', r213145.commentaire, '');
+  const r213815 = consoIdentification.find(r=>r.contrat==='213815');
+  eq('aucun lien Feuil1 -> Non recoupé + commentaire exact', {f:r213815.fiabilite.startsWith('Non recoupé'), c:r213815.commentaire}, {f:true, c:'agent propriétaire non identifié'});
+  eq('agent retenu = meilleure estimation (Feuil2)', r213815.agentRetenu, 'Oussama Hmamou');
+  const r220711 = consoIdentification.find(r=>r.contrat==='220711');
+  eq('traçabilité liée (contrat énergie + date vente)', {ce:r220711.contratEnergieLie, dv:r220711.dateVenteLiee}, {ce:'1810989', dv:'23/06/2026'});
+  eq('vente Feuil1 avec contrat conso="0" ignorée (isEmptyConso)', consoIdentification.some(r=>r.client==='SansLien Client'), false);
 })();
 
 /* ===================== RÉSULTAT ===================== */
