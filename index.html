@@ -3858,11 +3858,19 @@ function renderMesVentes(){
   const mine = filteredLignes().filter(l => norm(l.agent) === norm(currentAgentName));
   document.getElementById('mesVentesAgentLabel').textContent = '— ' + currentAgentName + (mine.length ? '' : ' (aucune vente trouvée : vérifiez l\'orthographe exacte de votre nom auprès de votre manager)');
 
-  let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0;
+  let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0, brutAffecte=0;
   mine.forEach(l=>{
     if(l.type==='MINT'){
       decom += (l.brutAnnule?l.brut:0) + (l.decommissionne?l.activation:0);
-      if(!l.brutAnnule){ if(l.statutPaiementBrut==='Payé') brutPaye+=l.brut; else brutDu+=l.brut; }
+      if(!l.brutAnnule){
+        if(l.statutPaiementBrut==='Payé') brutPaye+=l.brut;
+        else {
+          // transparence agent : la part du brut qui rembourse son avance est isolée — elle ne lui
+          // sera pas versée en cash, l'afficher en « attente de paiement » serait trompeur.
+          const aff = brutAffecteAvance(l);
+          brutDu += l.brut - aff; brutAffecte += aff;
+        }
+      }
       if(!l.decommissionne && l.activation>0){ if(l.statutPaiementActivation==='Payé') activPaye+=l.activation; else activDu+=l.activation; }
     } else {
       [[l.statutPaiementT1, l.t1Due], [l.statutPaiementT2, l.t2Due]].forEach(([st, due])=>{
@@ -3870,9 +3878,16 @@ function renderMesVentes(){
       });
     }
   });
+  // dette d'avance de l'agent connecté (clé = graphie canonique portée par ses lignes)
+  const agentKey = mine.length ? mine[0].agent : currentAgentName;
+  const compInfo = compensationByAgent[agentKey];
+  const avanceCard = (compInfo && compInfo.dette>0)
+    ? `<div class="stat-card amber" title="Une avance vous a été versée : le Brut (50 DH) de vos ventes MINT sert à la rembourser automatiquement — ces montants ne vous sont pas versés en cash. Couvert par vos ventes actuelles : ${compInfo.compensation} DH · restera à couvrir par vos prochaines ventes : ${compInfo.detteRestante} DH."><div class="label">Avance en cours — remboursée par vos ventes</div><div class="value">${compInfo.dette} DH</div></div>`
+    : (brutAffecte>0 ? `<div class="stat-card amber"><div class="label">Affecté au remboursement d'avance</div><div class="value">${brutAffecte} DH</div></div>` : '');
   document.getElementById('mesventes-summary').innerHTML = `
     <div class="stat-card mint"><div class="label">Déjà payé (Brut+Activation+Conso)</div><div class="value">${brutPaye+activPaye+consoPaye} DH</div></div>
-    <div class="stat-card amber"><div class="label">En attente de paiement</div><div class="value">${brutDu+activDu+consoDu} DH</div></div>
+    <div class="stat-card amber"><div class="label">En attente de paiement (cash)</div><div class="value">${brutDu+activDu+consoDu} DH</div></div>
+    ${avanceCard}
     <div class="stat-card red"><div class="label">Décommissionné</div><div class="value">${decom} DH</div></div>
     <div class="stat-card blue"><div class="label">Nombre de ventes</div><div class="value">${mine.length}</div></div>
   `;
@@ -3880,6 +3895,7 @@ function renderMesVentes(){
   const detailData = mine.map(l=> l.type==='MINT' ? {
     Type:'MINT', Date:l.dateVenteStr, Contrat:l.contrat, Statut_CRM:l.statutCRM,
     Brut:l.brut, Statut_Brut:l.brutAnnule?'—':l.statutPaiementBrut,
+    AffecteAvance: isBrutBlockedByAvance(l.id), PayeComp: !!l.payeParCompensation,
     Activation:l.activation, Statut_Activation:(l.activation===0||l.decommissionne)?'—':l.statutPaiementActivation,
     Decommissionne:(l.brutAnnule||l.decommissionne)?'OUI':'NON', Net:l.net
   } : {
@@ -3895,10 +3911,13 @@ function renderMesVentes(){
       {title:"Contrat", field:"Contrat", width:110},
       {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
       {title:"Brut/Signature (DH)", field:"Brut", width:140, hozAlign:"right"},
-      {title:"Statut Brut", field:"Statut_Brut", width:130, formatter:c=>{
+      {title:"Statut Brut", field:"Statut_Brut", width:150, formatter:c=>{
         const v=c.getValue();
+        const r=c.getRow().getData();
         if(v==='—') return '—';
+        if(v==='Payé' && r.PayeComp) return '<span class="tag ok" title="Réglé par compensation : ce montant a réduit votre avance (aucun versement cash)">Payé (compensation)</span>';
         if(v==='Payé') return '<span class="tag ok">Payé</span>';
+        if(v==='Non Payé' && r.AffecteAvance) return '<span class="tag warn" title="Ce brut rembourse votre avance en cours — il ne vous sera pas versé en cash. Voir la carte « Avance en cours » ci-dessus.">Affecté avance</span>';
         if(v==='Non Payé') return '<span class="tag bad">Non Payé</span>';
         return `<span style="color:var(--ink-dim)">${v}</span>`;
       }},
@@ -3920,8 +3939,13 @@ function renderMesVentes(){
   const byWeek = {};
   mine.filter(l=>l.type==='MINT' && !l.brutAnnule).forEach(l=>{
     const k = l.vendrediPaiementStr;
-    if(!byWeek[k]) byWeek[k] = {Vendredi:k, Du:0, Paye:0};
-    if(l.statutPaiementBrut==='Payé') byWeek[k].Paye += l.brut; else byWeek[k].Du += l.brut;
+    if(!byWeek[k]) byWeek[k] = {Vendredi:k, Du:0, Affecte:0, Paye:0};
+    if(l.statutPaiementBrut==='Payé') byWeek[k].Paye += l.brut;
+    else {
+      // vue cash : la part qui rembourse l'avance ne sera pas versée ce vendredi-là
+      const aff = brutAffecteAvance(l);
+      byWeek[k].Du += l.brut - aff; byWeek[k].Affecte += aff;
+    }
   });
   const weekData = Object.values(byWeek).sort((a,b)=>{
     const [da,ma,ya]=a.Vendredi.split('/'); const [db,mb,yb]=b.Vendredi.split('/');
@@ -3933,7 +3957,9 @@ function renderMesVentes(){
     placeholder:"Rien à venir.",
     columns:[
       {title:"Vendredi", field:"Vendredi", widthGrow:1},
-      {title:"Montant dû (DH)", field:"Du", hozAlign:"right", width:150, formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Montant dû cash (DH)", field:"Du", hozAlign:"right", width:160, formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},
+      {title:"Affecté avance (DH)", field:"Affecte", hozAlign:"right", width:150,
+        formatter:c=>c.getValue()>0?`<span class="tag warn" title="Rembourse votre avance — non versé en cash">${c.getValue()} DH</span>`:'<span style="color:var(--ink-dim)">—</span>'},
       {title:"Déjà payé (DH)", field:"Paye", hozAlign:"right", width:150}
     ]
   });

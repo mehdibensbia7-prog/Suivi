@@ -41,7 +41,8 @@ L'application doit également protéger les règles métier sensibles autour des
 - `isStatusPaid("Non payé")` retourne `false`.
 - Contrat payé ne peut pas repasser en non-payé sans intervention Qualité.
 - `Annulé` après paiement conserve le montant brut et positionne `revueQualiteRequise = true`.
-- La page de production ne doit jamais afficher le test harness ; `index-backup.html` contient la vraie interface à restaurer si nécessaire.
+- La page de production (`index.html`) ne doit jamais afficher de harnais de test. L'application vit UNIQUEMENT dans `index.html` — pour restaurer une version antérieure, utiliser l'historique git (`git log` / `git checkout`), jamais une copie manuelle. (Critère mis à jour 2026-07-16 : l'ancienne référence à `index-backup.html` était périmée, le fichier a été retiré du dépôt.)
+- La suite de non-régression `tests.html` (+ `tests.js`) doit afficher 0 FAIL avant toute livraison touchant au moteur financier ; les copies verbatim qu'elle contient doivent être resynchronisées à chaque modification des fonctions sources (règle documentée en tête de `tests.js`).
 - Pas d'erreurs JavaScript concernant `XLSX` ou les dépendances.
 
 ## Références
@@ -49,6 +50,11 @@ L'application doit également protéger les règles métier sensibles autour des
 - Correctifs antérieurs : protection du statut payé, mise à jour des liens CDN, audit complet du projet.
 
 ## Journal des Correctifs
+
+- **2026-07-16** — Correctifs audit P2 : suite de tests pérenne + transparence agent + nettoyage du dépôt :
+  1. **`tests.html` + `tests.js` (nouveau, versionné)** : suite de non-régression du moteur financier — 56 assertions en 7 sections (fenêtre 15-20, compensation avance↔brut, acter/anti-double-paiement, projections de cash + invariant cash+affecté=total, validation de restauration caisse, clawback MINT règle Direction, parsePaymentFlag/bug historique « Non Payé »). À ouvrir dans un navigateur après chaque modification du moteur : 0 FAIL exigé avant livraison (nouveau critère d'acceptation). Règle de synchronisation des copies verbatim documentée en tête de `tests.js`. **Exécutée intégralement dans un moteur Chrome réel : 56/56 PASS.**
+  2. **Transparence agent (« Mes Ventes »)** : un agent endetté voyait ses bruts « Non Payé » sans explication (contestations prévisibles). Désormais : badge « Affecté avance » (tooltip explicatif) sur les lignes concernées, « Payé (compensation) » distinct du payé cash, carte « Avance en cours — remboursée par vos ventes » (dette + couvert + reste, en tooltip), carte « En attente de paiement (cash) » nette de la part affectée, colonne « Affecté avance » dans le tableau par vendredi.
+  3. **Nettoyage du dépôt** : suppression du suivi git de 3 anciennes copies de l'interface (`index-backup.html`, `index.backup.html`, `index.html.currentbackup` — risque de travailler/déployer une version périmée) et de 11 scripts/sorties d'inspection jetables (`inspect_*`, `compare_inspect.ps1`, `debug_norm.ps1`, `*_output.*`, `*_report_auto.json`) ; retrait du suivi (sans suppression locale) des 2 fichiers de données réelles (`ASK Call….xlsx`, `tableau statut brut.xlsx` — noms clients/agents, la purge de l'historique reste à faire, voir P0) ; `.gitignore` complété ; critère d'acceptation périmé référençant `index-backup.html` réécrit (restauration = historique git). Conservés : `compare_expected.js` + `expected_mapping.json` (chargés à l'exécution) et `xlsx.full.min.js` (fallback CDN).
 
 - **2026-07-16** — Correctifs audit P1 : sauvegarde de la Caisse (R3) + projections de cash corrigées (D4/R4) :
   1. **Sauvegarde/restauration de la Caisse (R3)** : la caisse ne vit que dans l'IndexedDB d'un seul navigateur — un nettoyage des données de navigation ou un changement de poste effaçait tout le registre financier sans recours. Nouveaux boutons dans l'onglet Caisse (panneau Mouvements) : « ⭳ Sauvegarder la caisse (.json) » (état complet : injections, débits, avances, historique, compensations actées) et « ⭱ Restaurer » (validation stricte du schéma avant toute écriture — id/main, tableaux injections/mintDebits, avances objet ; confirmation détaillée affichant les soldes actuel vs sauvegardé côte à côte ; remplacement complet assumé). Réservé aux rôles Caisse.

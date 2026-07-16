@@ -9,6 +9,12 @@ index.pre-*.backup.html
 .vscode/
 
 # Données métier sensibles — ne jamais publier sur GitHub :
-# avances nominatives des agents et exports de ventes récents
+# avances nominatives des agents et exports de ventes (noms de clients/agents, contrats)
 Avance.xlsx
-tableau statut brut (*.xlsx
+tableau statut brut*.xlsx
+ASK Call*.xlsx
+
+# Anciennes copies de l'interface (retirées du dépôt le 2026-07-16 — la vraie
+# application est UNIQUEMENT index.html ; pour restaurer une version : git log / git checkout)
+index-backup.html
+index.backup.html
