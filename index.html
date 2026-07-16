@@ -1094,8 +1094,13 @@ document.getElementById('exportDiagnosticsBtn').addEventListener('click', ()=>{
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'diagnostics_'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'_')+'.log'; a.click();
 });
 
-// run import test suite and append results
+// run import test suite and append results — confirmation explicite obligatoire (2026-07-16 : un
+// clic accidentel avait auparavant remplacé la vue par des données de test avant la sécurisation
+// de runImportTestSuite()). Le test reste désormais sans danger pour les vraies sessions, mais on
+// garde une confirmation car il bascule temporairement l'écran sur des données factices pendant
+// son exécution.
 document.getElementById('runImportTestsBtn').addEventListener('click', async ()=>{
+  if(!confirm('Lancer la suite de tests d\'import ?\n\nCela va temporairement afficher des données factices à l\'écran le temps du test, puis restaurer automatiquement votre session actuelle. Vos vraies sessions ne sont jamais supprimées.')) return;
   appendDiagnostic('info','Lancement tests','La suite de tests d\'import démarre');
   try{
     const res = await runImportTestSuite();
@@ -1108,9 +1113,11 @@ try{
   const autoChk = document.getElementById('autoRunTestsCheckbox');
   const autoBadge = document.getElementById('autoRunBadge');
   function setAutoBadge(on){ if(!autoBadge) return; if(on){ autoBadge.textContent = 'Auto-run: ON'; autoBadge.className='status-badge ok'; autoBadge.style.display='inline-flex'; } else { autoBadge.style.display='none'; } }
-  // enable auto-run by default for all users unless explicitly set
+  // Désactivé par défaut (2026-07-16) : l'auto-run déclenchait silencieusement, après chaque import
+  // de session JSON, une suite de tests qui basculait l'écran sur des données factices — surprenant
+  // pour un usage en production. L'utilisateur doit désormais l'activer explicitement s'il le souhaite.
   let enabled = localStorage.getItem('sipp.autoRunTests');
-  if(enabled === null){ enabled = 'true'; localStorage.setItem('sipp.autoRunTests','true'); }
+  if(enabled === null){ enabled = 'false'; localStorage.setItem('sipp.autoRunTests','false'); }
   const isEnabled = enabled === 'true';
   autoChk.checked = isEnabled;
   setAutoBadge(isEnabled);
@@ -2220,12 +2227,19 @@ async function importSessionJSON(file){
   }catch(e){ appendDiagnostic('error','Import invalide', String(e)); alert('Import invalide: '+e.message); return null; }
 }
 
-  // Additional heuristic: escape newlines and strip control chars (applied earlier in pipeline)
-  // RunImportTestSuite: programmatic re-run of the import test scenarios (used by diagnostics button)
+  // RunImportTestSuite : rejoue les scénarios d'import (utilisé par le bouton Diagnostics).
+  // SÉCURISÉ (2026-07-16) — un incident réel a montré que l'ancienne version supprimait TOUTES les
+  // sessions existantes avant de lancer les tests, et laissait la session de test devenir la session
+  // active affichée à l'écran (données factices "Alice / 00001" à la place des vraies données).
+  // Corrections : (1) plus aucune suppression de session préexistante — seules les sessions CRÉÉES
+  // par ce test sont identifiées (diff avant/après) puis nettoyées à la fin ; (2) la session
+  // réellement active avant le lancement est restaurée systématiquement en sortie.
   async function runImportTestSuite(){
     const results = {summary:[], details:[]};
-    // cleanup
-    await openSippDB(); const old = await getAllSessions(); if(Array.isArray(old)){ for(const s of old){ try{ await deleteSessionById(s.id); }catch(e){} } }
+    await openSippDB();
+    const originalSessionId = getCurrentSessionId();
+    const before = await getAllSessions();
+    const beforeIds = new Set(before.map(s=>s.id));
     // helper to programmatically trigger file inputs
     async function setFileInput(selector, content, name){ const el = document.querySelector(selector); const f = new File([content], name, {type:'application/json'}); const dt = new DataTransfer(); dt.items.add(f); el.files = dt.files; el.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,500)); }
 
@@ -2242,8 +2256,17 @@ async function importSessionJSON(file){
     const pass = 's3cr3t!'; const plainPayload = JSON.stringify({ meta:{ id:'tenc-'+Date.now(), name:'Test Enc', createdAt:new Date().toISOString(), createdBy:'tester'}, lines:[{contrat:'E0001', type:'MINT', agent:'Bob', brut:200}] });
     const salt = (Math.random()+''+Date.now()).slice(2,12); const iv = crypto.getRandomValues(new Uint8Array(12)); const key = await deriveKeyFromPass(pass, salt); const ctBuf = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, new TextEncoder().encode(plainPayload)); const ctB64 = btoa(String.fromCharCode(...new Uint8Array(ctBuf))); const encPayload = JSON.stringify({ salt: salt, iv: Array.from(iv), ct: ctB64 });
     window._promptResponses = [pass]; await setFileInput('#importSessionFile', encPayload, 'session_enc.json'); results.summary.push('enc_valid');
-    // return summary of sessions
-    const final = await getAllSessions(); results.details = final.map(s=>({id:s.id,name:s.name})); return results;
+
+    // nettoyage ciblé : uniquement les sessions apparues pendant ce test, jamais les préexistantes
+    const after = await getAllSessions();
+    const created = after.filter(s=>!beforeIds.has(s.id));
+    results.details = created.map(s=>({id:s.id,name:s.name}));
+    for(const s of created){ try{ await deleteSessionById(s.id); }catch(e){} }
+
+    // restaure la session réellement active avant le lancement des tests
+    if(originalSessionId && beforeIds.has(originalSessionId)){ await setCurrentSessionId(originalSessionId); }
+    else { localStorage.removeItem('sipp.currentSessionId'); rawLignes=[]; overrides={}; renderAll(); }
+    return results;
   }
 
 // simple encryption POC using WebCrypto
