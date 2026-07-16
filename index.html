@@ -229,6 +229,21 @@
   <button class="btn" id="sessionsBtn">Sessions</button>
   <select id="sheetSelector"><option value="">Feuille…</option></select>
   <span style="width:1px;height:22px;background:var(--line);"></span>
+  <span id="periodWrap" style="display:flex;gap:8px;align-items:center;">
+    <select id="periodType" title="Filtrer toutes les vues par période (date de vente)">
+      <option value="all">Toute la période</option>
+      <option value="jour">Jour</option>
+      <option value="semaine">Semaine</option>
+      <option value="mois">Mois</option>
+      <option value="trimestre">Trimestre</option>
+      <option value="semestre">Semestre</option>
+      <option value="annee">Année</option>
+      <option value="vendredi">Vendredi de paie</option>
+    </select>
+    <input type="date" id="periodDate" style="display:none;background:var(--panel);color:var(--ink);border:1px solid var(--line);padding:9px 12px;border-radius:7px;font-size:13px;font-family:var(--mono);">
+    <select id="periodVendredi" style="display:none"><option value="">Tous les vendredis</option></select>
+  </span>
+  <span style="width:1px;height:22px;background:var(--line);"></span>
   <button class="btn" id="exportOverridesBtn">Exporter l'état (JSON)</button>
   <label class="btn file-btn" id="stateInputLabel" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);">Importer l'état<input type="file" id="stateInput" accept=".json"></label>
   <button class="btn primary" id="exportFinanceBtn">Exporter Trésorerie (.xlsx)</button>
@@ -278,8 +293,20 @@
   <div class="tab" id="tab-finance">
     <div class="summary-grid" id="finance-summary"></div>
     <div class="panel">
-      <h2>Échéancier de paie — Brut MINT <span class="sub">chaque vendredi qui suit la date de vente ; cliquez le vendredi dans le filtre ci-dessous pour isoler les lignes à régler</span></h2>
+      <h2>Agenda des règles financières <span class="sub">— bornes de dates qui sécurisent le calcul du net et du décommissionnement</span></h2>
+      <div id="reglesContent" class="legend" style="margin-top:0"></div>
+    </div>
+    <div class="panel">
+      <h2>Échéancier de paie — Brut MINT <span class="sub">chaque vendredi qui suit la date de vente ; cliquez le vendredi dans le filtre ci-dessous pour isoler les lignes à régler — les lignes rouges sont en retard</span></h2>
       <div id="table-payroll" class="table-scroll"></div>
+    </div>
+    <div class="panel">
+      <h2>Reste à payer par agent <span class="sub">— brut + activation + conso, tous types confondus, retards signalés — pour solder chaque agent en un versement</span></h2>
+      <div id="table-duagent" class="table-scroll"></div>
+    </div>
+    <div class="panel">
+      <h2>Échéancier ConsoPilote <span class="sub">— montants devenant exigibles par mois (M+1 / M+2 des contrats non payés)</span></h2>
+      <div id="table-consoech" class="table-scroll"></div>
     </div>
     <div class="panel">
       <h2>Détail par contrat <span class="sub">— éditez « Statut Brut », « Statut Activation » et « Décommissionné » directement dans le tableau. Marquer « Payé » avant le vendredi de paie officiel = avance, automatiquement signalée.</span></h2>
@@ -474,6 +501,8 @@
 /* ============================= ÉTAT GLOBAL ============================= */
 let workbooks = [];
 let rawLignes = [];       // toutes les lignes-contrat calculées (MINT + CONSO)
+// Filtre de période global (appliqué par tous les rendus via periodMatch/filteredLignes)
+let periodFilter = { type:'all', anchor:null, vendredi:null };
 let overrides = {};       // { lineId: { statutPaiementBrut, statutPaiementActivation, datePaiementBrut, decommissionManuel, motifQualite, statutPaiement (CONSO) } }
 const APP_VERSION = 'v2.2';
 let tSuivi, tFinance, tKPI, tAlertes, tQualite, tMesVentes, tMesVentesSemaine, tMesVentesMois;
@@ -625,9 +654,44 @@ function applyRolePermissions(){
   document.getElementById('exportOverridesBtn').style.display = p.manageState ? '' : 'none';
   document.getElementById('stateInputLabel').style.display = p.manageState ? '' : 'none';
   document.getElementById('exportFinanceBtn').style.display = p.tabs.includes('finance') ? '' : 'none';
+  // filtre de période : réservé aux rôles habilités à voir des données transverses (pas l'agent)
+  const pw = document.getElementById('periodWrap');
+  if(pw) pw.style.display = (currentRole==='agent') ? 'none' : 'flex';
 
   if(rawLignes.length){ renderQualite(); renderMesVentes(); if(p.defaultTab==='calendrier') renderCalendar(); }
 }
+
+/* ---- Câblage du filtre de période global (toolbar) ---- */
+function refreshPeriodVendredis(){
+  const sel = document.getElementById('periodVendredi');
+  if(!sel) return;
+  const vendredis = [...new Set(rawLignes.filter(l=>l.type==='MINT'&&l.vendrediPaiementStr).map(l=>l.vendrediPaiementStr))]
+    .sort((a,b)=>{const [da,ma,ya]=a.split('/'),[db,mb,yb]=b.split('/');return new Date(ya,ma-1,da)-new Date(yb,mb-1,db);});
+  const cur = periodFilter.vendredi || '';
+  sel.innerHTML = '<option value="">Tous les vendredis</option>' + vendredis.map(v=>`<option value="${v}" ${v===cur?'selected':''}>${v}</option>`).join('');
+}
+document.getElementById('periodType').addEventListener('change', e=>{
+  const t = e.target.value;
+  periodFilter.type = t;
+  const dateInp = document.getElementById('periodDate');
+  const vendSel = document.getElementById('periodVendredi');
+  dateInp.style.display = (t==='all'||t==='vendredi') ? 'none' : '';
+  vendSel.style.display = (t==='vendredi') ? '' : 'none';
+  if(t==='vendredi') refreshPeriodVendredis();
+  if(t!=='all' && !periodFilter.anchor){
+    const iso = new Date().toISOString().slice(0,10);
+    dateInp.value = iso; periodFilter.anchor = iso;
+  }
+  if(rawLignes.length) renderAll();
+});
+document.getElementById('periodDate').addEventListener('change', e=>{
+  periodFilter.anchor = e.target.value || null;
+  if(rawLignes.length) renderAll();
+});
+document.getElementById('periodVendredi').addEventListener('change', e=>{
+  periodFilter.vendredi = e.target.value || null;
+  if(rawLignes.length) renderAll();
+});
 
 /* ============================= UI: NAV & MESSAGES ============================= */
 document.querySelectorAll('.navbtn').forEach(b=>{
@@ -1027,12 +1091,14 @@ function buildStatusMap(sources){
         if(normalized.includes('actif') || normalized.includes('activ')) etatRaw = 'Activé';
         else if(normalized.includes('sign')) etatRaw = 'Signé';
         else if(normalized.includes('annul') || normalized.includes('annule')) etatRaw = 'Annulée';
-        const existing = map[ref] || {etat:null, dateAct:null, dateResil:null, sources:[]};
+        const existing = map[ref] || {etat:null, dateAct:null, dateResil:null, prelev:null, sources:[]};
         const mergedEtat = existing.etat && existing.etat !== etatRaw ? `${existing.etat} / ${etatRaw}` : etatRaw || existing.etat;
         map[ref] = {
           etat: mergedEtat || existing.etat,
           dateAct: existing.dateAct,
           dateResil: existing.dateResil,
+          // prélèvement (Feuil2) : requis par la règle ConsoPilote — paiement vérifié = Signé + prélèvement actif
+          prelev: (cB.prelev!==-1 ? r[cB.prelev] : null) || existing.prelev,
           sources: [...existing.sources, `${fileName}:${sheetName}`]
         };
       });
@@ -1169,6 +1235,49 @@ function nextFriday(d){
   const res = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
   return res;
 }
+/* ============================= FILTRE DE PÉRIODE GLOBAL =============================
+   Bornes calculées depuis periodFilter.type + periodFilter.anchor (date) ou .vendredi (chaîne).
+   Toutes les lignes sont filtrées sur leur date de vente (sauf 'vendredi' → vendrediPaiementStr). */
+function periodBounds(){
+  const f = periodFilter;
+  if(f.type==='all') return null;
+  if(f.type==='vendredi') return {vendredi:f.vendredi||null};
+  const d = f.anchor ? parseDate(f.anchor) : new Date();
+  if(!d) return null;
+  const y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
+  let start, end;
+  if(f.type==='jour'){ start = new Date(y,m,day); end = new Date(y,m,day+1); }
+  else if(f.type==='semaine'){
+    const dow = (d.getDay()+6)%7; // lundi=0
+    start = new Date(y,m,day-dow); end = new Date(y,m,day-dow+7);
+  }
+  else if(f.type==='mois'){ start = new Date(y,m,1); end = new Date(y,m+1,1); }
+  else if(f.type==='trimestre'){ const q = Math.floor(m/3); start = new Date(y,q*3,1); end = new Date(y,q*3+3,1); }
+  else if(f.type==='semestre'){ const s = m<6?0:6; start = new Date(y,s,1); end = new Date(y,s+6,1); }
+  else if(f.type==='annee'){ start = new Date(y,0,1); end = new Date(y+1,0,1); }
+  return {start,end};
+}
+function periodLabel(){
+  const f = periodFilter, b = periodBounds();
+  if(!b) return null;
+  if(f.type==='vendredi') return b.vendredi ? `Vendredi ${b.vendredi}` : 'Tous les vendredis';
+  const s = b.start, e = new Date(b.end.getTime()-86400000);
+  if(f.type==='jour') return fmtDate(s);
+  return `${fmtDate(s)} → ${fmtDate(e)}`;
+}
+function periodMatch(l){
+  const b = periodBounds();
+  if(!b) return true;
+  if('vendredi' in b){
+    if(l.type!=='MINT') return true; // Conso non filtré par vendredi (n'en a pas)
+    return !b.vendredi || l.vendrediPaiementStr===b.vendredi;
+  }
+  const d = toDateSafe(l.dateVente);
+  if(!d) return false;
+  return d.getTime() >= b.start.getTime() && d.getTime() < b.end.getTime();
+}
+function filteredLignes(){ return rawLignes.filter(periodMatch); }
+
 // une avance = le brut a été réglé avant son vendredi de paie officiel
 function isAvance(l){
   if(l.type!=='MINT' || l.statutPaiementBrut!=='Payé' || !l.datePaiementBrut || !l.vendrediPaiement) return false;
@@ -1183,6 +1292,134 @@ function setOverride(id, key, value){
   const line = rawLignes.find(l=>l.id===id);
   if(line) line[key] = value;
   return line;
+}
+
+/* ============================= AGENDA DES RÈGLES FINANCIÈRES =============================
+   Borne dans le temps l'application des règles de commissionnement, pour sécuriser le calcul
+   du net et du décommissionnement : sans bornes de dates, une vente antérieure à l'entrée en
+   vigueur d'une règle générerait un dû fictif (ex. brut 50 DH sur des ventes de juin alors que
+   la commission brute n'a démarré qu'en juillet 2026). */
+const DEFAULT_REGLES = { brutStartDate: '2026-07-01', clawbackMois: 3, consoJourT1: 45, consoMoisClos: 2 };
+function getRegles(){
+  try{ return Object.assign({}, DEFAULT_REGLES, JSON.parse(localStorage.getItem('sipp.reglesFinancieres')||'{}')); }
+  catch(e){ return Object.assign({}, DEFAULT_REGLES); }
+}
+function saveRegles(r){ try{ localStorage.setItem('sipp.reglesFinancieres', JSON.stringify(r)); }catch(e){ console.warn('saveRegles failed', e); } }
+function toDateSafe(v){ if(!v) return null; return v instanceof Date ? v : parseDate(v); }
+function brutEligible(dateVente){
+  const dv = toDateSafe(dateVente);
+  const start = parseDate(getRegles().brutStartDate);
+  return !!(dv && start && dv.getTime() >= start.getTime());
+}
+/* Règle ConsoPilote (rémunération totale : 100 DH en 2 tranches de 50 DH) :
+   - paiement vérifié UNIQUEMENT si statut « Signé » ET prélèvement « actif » ; tout autre statut → en attente ;
+   - tranche 1 (50%) exigible à J+45 si conditions OK ;
+   - tranche 2 (50%) exigible une fois les 2 mois clos si les statuts sont TOUJOURS OK, sinon perdue ;
+   - une tranche déjà payée reste acquise (pas de clawback Conso).
+   Limite connue : sans historique de dates de changement de statut, une tranche non encore payée
+   dont les conditions sont KO aujourd'hui est traitée comme non acquise. */
+function computeConsoFields(lineId, dateVente, etatRaw, prelevRaw, legacy){
+  const r = getRegles();
+  const today = new Date();
+  const o = overrides[lineId] || {};
+  legacy = legacy || {};
+  const etatN = norm(etatRaw||'');
+  const prelevActif = /actif|active|oui|ok|yes|^1$/.test(norm(prelevRaw||''));
+  const isChute = /annul|resil|retract|refus/.test(etatN);
+  const isSigned = /sign|activ/.test(etatN);
+  const conditionsOK = isSigned && prelevActif && !isChute;
+  const dv = toDateSafe(dateVente);
+  const jours = dv ? Math.floor((today - dv)/86400000) : null;
+  const moisEcoules = dv ? monthsBetween(dv, today) : null;
+  const t1Date = dv ? new Date(dv.getFullYear(), dv.getMonth(), dv.getDate() + r.consoJourT1) : null;
+  const t2Date = dv ? new Date(dv.getFullYear(), dv.getMonth() + r.consoMoisClos, dv.getDate()) : null;
+  const t1Echue = jours!==null && jours >= r.consoJourT1;
+  const t2Echue = moisEcoules!==null && moisEcoules >= r.consoMoisClos;
+  // migration : l'ancien modèle avait un statut de paiement unique — s'il était « Payé », les deux tranches le sont
+  const t1Paye = o.statutPaiementT1==='Payé' || o.statutPaiement==='Payé' || !!legacy.t1;
+  const t2Paye = o.statutPaiementT2==='Payé' || o.statutPaiement==='Payé' || !!legacy.t2;
+  const t1Due = t1Paye || (t1Echue && conditionsOK);
+  const t2Due = t2Paye || (t2Echue && conditionsOK);
+  const t2Perdue = t2Echue && !conditionsOK && !t2Paye;
+  const t1Perdue = isChute && !t1Due;
+  return {
+    statutCRM: etatRaw || 'Introuvable (CRM)',
+    prelevement: prelevRaw ? (prelevActif ? 'Actif' : String(prelevRaw)) : '—',
+    conditionsOK, enAttente: !conditionsOK, isChute,
+    total: 100, t1: 50, t2: 50,
+    t1Date, t1DateStr: fmtDate(t1Date), t2Date, t2DateStr: fmtDate(t2Date),
+    t1Echue, t2Echue, t1Due, t2Due, t1Perdue, t2Perdue,
+    statutPaiementT1: t1Paye ? 'Payé' : 'Non Payé',
+    statutPaiementT2: t2Paye ? 'Payé' : 'Non Payé',
+    net: (t1Due ? 50 : 0) + (t2Due ? 50 : 0),
+    moisEcoules
+  };
+}
+/* Décision manager sur une vente MINT « Introuvable » (workflow obligatoire) :
+   'attente'   → temporairement perdue, paiements suspendus (« — »), aucune commission due ;
+   'retrouvee' → remise en circuit normal — le statut réel lui sera réattribué au prochain import CRM ;
+   'perdue'    → Annulée définitivement : chute classique (clawback auto si rien payé, sinon revue Qualité). */
+function applyIntrouvableDecision(id, dec){
+  const l = rawLignes.find(x=>x.id===id);
+  if(!l || l.type!=='MINT' || !l.introuvable) return;
+  overrides[id] = overrides[id] || {};
+  overrides[id].introuvableDecision = dec;
+  l.introuvableDecision = dec;
+  const wasBrutPaid = l.statutPaiementBrut==='Payé';
+  const wasActivPaid = l.statutPaiementActivation==='Payé';
+  if(dec==='perdue'){
+    l.statutCRM = 'Annulée (introuvable — perdue définitivement)';
+    l.tempPerdue = false;
+    const withinClawback = l.moisEcoules!==null && l.moisEcoules<=getRegles().clawbackMois;
+    l.decommissionAuto = withinClawback && !wasBrutPaid && !wasActivPaid;
+    l.needsQualityReview = (wasBrutPaid || wasActivPaid) && !l.decommissionManuel;
+  } else {
+    l.statutCRM = 'Introuvable (CRM)';
+    l.tempPerdue = (dec!=='retrouvee');
+    l.decommissionAuto = false;
+    l.needsQualityReview = false;
+  }
+  l.decommissionne = l.decommissionAuto || l.decommissionManuel;
+  if(!wasBrutPaid && l.brut>0) l.statutPaiementBrut = l.tempPerdue ? '—' : ((overrides[id].statutPaiementBrut && overrides[id].statutPaiementBrut!=='—') ? overrides[id].statutPaiementBrut : 'Non Payé');
+  if(!wasActivPaid) l.statutPaiementActivation = l.tempPerdue ? '—' : (l.statutPaiementActivation==='—' ? 'Non Payé' : l.statutPaiementActivation);
+  l.net = (l.decommissionne || l.tempPerdue) ? 0 : (l.brut + l.activation);
+  renderAll();
+}
+
+// recalcule brut/net des lignes existantes après un changement de règle ou un rechargement de
+// session (sans re-parser les fichiers) — inclut la migration des anciennes lignes CONSO
+function applyReglesToLignes(){
+  rawLignes.forEach(l=>{
+    if(l.type==='MINT'){
+      const eligible = brutEligible(l.dateVente);
+      l.brut = eligible ? 50 : 0;
+      // Rétablit les champs du workflow « Introuvable » pour les lignes chargées depuis IndexedDB
+      // (l'ancien schéma ne les avait pas — sinon la décision manager ne s'appliquerait jamais).
+      const o = overrides[l.id] || {};
+      const introuvable = /introuvable/.test(norm(l.statutCRM||''));
+      const dec = introuvable ? (o.introuvableDecision || l.introuvableDecision || 'attente') : null;
+      l.introuvable = introuvable;
+      l.introuvableDecision = dec;
+      l.tempPerdue = introuvable && dec==='attente';
+      const wasBrutPaid = l.statutPaiementBrut==='Payé';
+      const wasActivPaid = l.statutPaiementActivation==='Payé';
+      if(!eligible){ l.statutPaiementBrut = '—'; }
+      else if(l.tempPerdue && !wasBrutPaid){ l.statutPaiementBrut = '—'; }
+      else if(l.statutPaiementBrut==='—'){ l.statutPaiementBrut = o.statutPaiementBrut || 'Non Payé'; }
+      if(l.tempPerdue && !wasActivPaid) l.statutPaiementActivation = '—';
+      else if(l.statutPaiementActivation==='—' && !l.tempPerdue) l.statutPaiementActivation = o.statutPaiementActivation || 'Non Payé';
+      l.net = (l.decommissionne || l.tempPerdue) ? 0 : (l.brut + l.activation);
+    } else if(l.type==='CONSO'){
+      const etat = (l.statutCRM && l.statutCRM!=='Introuvable (CRM)') ? l.statutCRM : null;
+      const prelev = (l.prelevement && l.prelevement!=='—') ? l.prelevement : null;
+      const fields = computeConsoFields(l.id, l.dateVente, etat, prelev, {
+        t1: l.statutPaiementT1==='Payé' || l.statutPaiement==='Payé',
+        t2: l.statutPaiementT2==='Payé' || l.statutPaiement==='Payé'
+      });
+      Object.assign(l, fields);
+    }
+  });
+  renderAll();
 }
 
 /* ============================= PERSISTENCE (IndexedDB) ============================= */
@@ -1221,8 +1458,9 @@ async function setCurrentSessionId(id){
     const lignes = await getAllLignesForSession(id);
     // replace in-memory rawLignes and re-run renders
     rawLignes = (lignes||[]).map(l=>Object.assign({}, l));
-    // rebuild any caches if needed
-    renderAll();
+    // réapplique l'agenda des règles : les lignes persistées peuvent dater d'avant un changement
+    // de règle (ex. brut 50 DH stocké sur des ventes antérieures à son entrée en vigueur)
+    applyReglesToLignes(); // inclut renderAll()
     setStatus('Session chargée: '+(id||'null'),'ok');
   }catch(e){ console.warn('Erreur chargement session', e); setStatus('Erreur chargement session','error'); }
 }
@@ -1577,39 +1815,54 @@ function buildLignes(aSources, statusMap, hasCRM){
 
   Object.values(mintGroups).forEach(item=>{
     if(!item.dateVente) return;
-    const etatRaw = statusMap[item.ref]?.etat || item.statutVente || 'Introuvable (CRM)';
-    const etatN = norm(etatRaw);
+    const lineId = stableId('MINT', item.ref);
+    const manualOverride = overrides[lineId] || {};
+    let etatRaw = statusMap[item.ref]?.etat || item.statutVente || 'Introuvable (CRM)';
     const found = !!statusMap[item.ref];
+    /* Règle « Introuvable » (MINT uniquement) : une vente introuvable est mise en attente et
+       temporairement considérée comme perdue (aucune commission due) tant que le manager n'a pas
+       statué sur la recherche client : « retrouvée » → remise en circuit, le statut réel lui sera
+       réattribué au prochain import CRM ; « perdue » → Annulée définitivement (chute classique). */
+    const introuvable = /introuvable/.test(norm(etatRaw));
+    const introuvableDecision = introuvable ? (manualOverride.introuvableDecision || 'attente') : null;
+    if(introuvable && introuvableDecision==='perdue'){
+      etatRaw = 'Annulée (introuvable — perdue définitivement)';
+    }
+    const tempPerdue = introuvable && introuvableDecision==='attente';
+    const etatN = norm(etatRaw);
     const isActivated = /activ/.test(etatN);
     const isChute = /annul|resil|retract|refus/.test(etatN);
     const isPending = !found || /^introuvable|^en attente/.test(etatN);
     const moisEcoules = monthsBetween(item.dateVente, today);
-    const withinClawbackWindow = moisEcoules !== null && moisEcoules <= 3;
-    const brut = 50;
+    const regles = getRegles();
+    const withinClawbackWindow = moisEcoules !== null && moisEcoules <= regles.clawbackMois;
+    // Agenda des règles : le brut de 50 DH ne s'applique qu'aux ventes à partir de sa date
+    // d'entrée en vigueur (01/07/2026 par défaut) — avant, aucune commission brute n'est due.
+    const brut = brutEligible(item.dateVente) ? 50 : 0;
     const activation = isActivated ? 150 : 0;
     const payeBrutPaid = parsePaymentFlag(item.payeBrut);
 
-    const lineId = stableId('MINT', item.ref);
-    const manualOverride = overrides[lineId] || {};
     const decommissionManuel = !!manualOverride.decommissionManuel;
     const wasBrutPaid = manualOverride.statutPaiementBrut === 'Payé' || payeBrutPaid;
     const wasActivPaid = manualOverride.statutPaiementActivation === 'Payé';
     const autoClawback = isChute && withinClawbackWindow && !wasBrutPaid && !wasActivPaid;
     const needsQualityReview = isChute && (wasBrutPaid || wasActivPaid) && !decommissionManuel;
     const decommissionne = autoClawback || decommissionManuel;
-    const net = decommissionne ? 0 : (brut + activation);
+    const net = (decommissionne || tempPerdue) ? 0 : (brut + activation);
     const vendrediPaiement = nextFriday(item.dateVente);
 
     rawLignes.push({
       id: lineId, type:'MINT', agent:item.agent || '(agent non renseigné)', dateVente:item.dateVente, dateVenteStr: fmtDate(item.dateVente),
       vendrediPaiement, vendrediPaiementStr: fmtDate(vendrediPaiement),
       contrat:item.ref, client:item.client, produit:item.produit || 'MINT',
-      statutCRM: found ? (etatRaw||'—') : (item.statutVente || 'Introuvable (CRM)'),
+      statutCRM: etatRaw || '—',
       brut, activation, net,
+      introuvable, introuvableDecision, tempPerdue,
       decommissionAuto: autoClawback, decommissionManuel,
       decommissionne, needsQualityReview,
-      statutPaiementBrut: manualOverride.statutPaiementBrut || (payeBrutPaid ? 'Payé' : 'Non Payé'),
-      statutPaiementActivation: manualOverride.statutPaiementActivation || 'Non Payé',
+      // tempPerdue : paiement suspendu (« — ») tant que le manager n'a pas statué — sauf si déjà payé (acquis)
+      statutPaiementBrut: (brut===0 || (tempPerdue && !wasBrutPaid)) ? '—' : (manualOverride.statutPaiementBrut || (payeBrutPaid ? 'Payé' : 'Non Payé')),
+      statutPaiementActivation: (tempPerdue && !wasActivPaid) ? '—' : (manualOverride.statutPaiementActivation || 'Non Payé'),
       datePaiementBrut: manualOverride.datePaiementBrut || null,
       motifQualite: manualOverride.motifQualite || '',
       pending: isPending,
@@ -1620,23 +1873,16 @@ function buildLignes(aSources, statusMap, hasCRM){
 
   Object.values(consoGroups).forEach(item=>{
     if(!item.dateVente) return;
-    const moisEcoules = monthsBetween(item.dateVente, today);
-    const signature = 100;
-    const m1 = (moisEcoules!==null && moisEcoules>=1) ? 50 : 0;
-    const m2 = (moisEcoules!==null && moisEcoules>=2) ? 50 : 0;
-    const net = signature + m1 + m2;
     const lineId = stableId('CONSO', item.ref);
-    const manualOverride = overrides[lineId] || {};
-    rawLignes.push({
-      id: lineId, type:'CONSO', agent:item.agent || '(agent non renseigné)', dateVente:item.dateVente, dateVenteStr: fmtDate(item.dateVente),
-      contrat:item.ref, client:item.client, produit: 'ConsoPilote',
-      signature, m1, m2, net,
-      m1Echu: moisEcoules!==null && moisEcoules>=1,
-      m2Echu: moisEcoules!==null && moisEcoules>=2,
-      statutPaiement: manualOverride.statutPaiement || 'Non Payé',
-      moisEcoules,
+    const st = statusMap[item.ref] || null;
+    // règle ConsoPilote : 100 DH en 2 tranches conditionnées (Signé + prélèvement actif) — voir computeConsoFields
+    const fields = computeConsoFields(lineId, item.dateVente, st ? st.etat : null, st ? st.prelev : null);
+    rawLignes.push(Object.assign({
+      id: lineId, type:'CONSO', agent:item.agent || '(agent non renseigné)',
+      dateVente:item.dateVente, dateVenteStr: fmtDate(item.dateVente),
+      contrat:item.ref, client:item.client, produit:'ConsoPilote',
       sourceInfo: item.sources.join(' ; ')
-    });
+    }, fields));
   });
 }
 
@@ -1650,13 +1896,17 @@ function renderAll(){
   renderCalendar();
   renderQualite();
   renderMesVentes();
+  // badge de période active + nb de lignes filtrées, visible en permanence
+  const lbl = periodLabel();
+  const n = filteredLignes().length, t = rawLignes.length;
+  if(lbl) setStatus(`Période active : ${lbl} — ${n}/${t} ligne(s) affichée(s).`, 'ok', 'Période');
 }
 
 function renderSuivi(){
-  const data = rawLignes.map(l=>({
+  const data = filteredLignes().map(l=>({
     Type: l.type, Agent: l.agent, Date_Vente: l.dateVenteStr, Contrat: l.contrat,
     Client: l.client, Produit: l.produit,
-    Statut_CRM: l.type==='MINT' ? l.statutCRM : '—'
+    Statut_CRM: l.type==='MINT' ? l.statutCRM : (l.statutCRM + (l.prelevement && l.prelevement!=='—' ? ' · prélèv. '+l.prelevement : ''))
   }));
   if(tSuivi) tSuivi.destroy();
   tSuivi = new Tabulator("#table-suivi", {
@@ -1675,8 +1925,21 @@ function renderSuivi(){
   });
 }
 
+// libellé d'état d'une tranche ConsoPilote (T1 = J+45, T2 = 2 mois clos)
+function consoTrancheDisplay(l, tranche){
+  const paye = tranche===1 ? l.statutPaiementT1 : l.statutPaiementT2;
+  const echue = tranche===1 ? l.t1Echue : l.t2Echue;
+  const perdue = tranche===1 ? l.t1Perdue : l.t2Perdue;
+  const dateStr = tranche===1 ? l.t1DateStr : l.t2DateStr;
+  if(paye==='Payé') return 'Payé';
+  if(perdue) return 'Perdu (statut KO)';
+  if(!l.conditionsOK) return 'En attente';
+  if(!echue) return 'À venir ('+dateStr+')';
+  return 'Non Payé';
+}
+
 function renderFinance(){
-  const data = rawLignes.map(l=>{
+  const data = filteredLignes().map(l=>{
     if(l.type==='MINT'){
       const wasBrutPaid = l.statutPaiementBrut==='Payé';
       return {
@@ -1693,11 +1956,12 @@ function renderFinance(){
         Net:l.net
       };
     }
+    // CONSO : Brut = tranche 1 (50 DH à J+45), Activation = tranche 2 (50 DH aux 2 mois clos)
     return {
       id:l.id, Type:'CONSO', Agent:l.agent, Date:l.dateVenteStr, Vendredi:'—',
       Contrat:l.contrat,
-      Brut:l.signature, Statut_Brut:l.statutPaiement, Date_Paiement:'', Avance:false,
-      Activation:l.m1+l.m2, Statut_Activation:'—',
+      Brut:l.t1, Statut_Brut: consoTrancheDisplay(l,1), Date_Paiement:'', Avance:false,
+      Activation:l.t2, Statut_Activation: consoTrancheDisplay(l,2),
       Decom_manuel:false, Revue_Qualite:false, Net:l.net
     };
   });
@@ -1713,29 +1977,40 @@ function renderFinance(){
       {title:"Contrat", field:"Contrat", width:100},
       {title:"Brut (DH)", field:"Brut", width:80, hozAlign:"right"},
       {title:"Statut Brut", field:"Statut_Brut", width:150,
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—' && !cell.getValue().startsWith('Payé — annulé'),
+        // Règle métier : seule la transition « Non Payé » → « Payé » est autorisée ici. Un contrat
+        // Payé est verrouillé (réversion via l'onglet Qualité uniquement) ; les états Conso
+        // « En attente / À venir / Perdu » ne sont pas éditables (conditions non réunies).
+        editor:"list", editable:cell=>canEditFinance() && cell.getValue()==='Non Payé',
         editorParams:{values:["Non Payé","Payé"]},
         formatter:c=>{
           const v=c.getValue();
           if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
           if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
+          if(v==='Payé') return `<span class="tag ok" title="Verrouillé : un paiement ne peut être défait que via l'onglet Suivi Qualité (Annulation Qualité)">${v} 🔒</span>`;
+          if(v==='En attente') return `<span class="tag warn" title="Rémunération en attente : statut ≠ Signé ou prélèvement inactif">${v}</span>`;
+          if(v.startsWith('À venir')) return `<span style="color:var(--ink-dim)">${v}</span>`;
+          if(v.startsWith('Perdu')) return `<span class="tag bad" title="Tranche perdue : statuts non conformes à l'échéance">${v}</span>`;
           return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
         },
         cellEdited:cell=>{
           const r = cell.getRow().getData();
-          if(cell.getValue()==='—') return;
-          const key = r.Type==='MINT' ? 'statutPaiementBrut' : 'statutPaiement';
-          setOverride(r.id, key, cell.getValue());
+          if(cell.getValue()!=='Payé' && cell.getValue()!=='Non Payé') return;
           if(r.Type==='MINT'){
+            setOverride(r.id, 'statutPaiementBrut', cell.getValue());
             // à chaque passage "Payé" on horodate au jour du jour ; repasser "Non Payé" efface la date
             if(cell.getValue()==='Payé') setOverride(r.id, 'datePaiementBrut', fmtDate(new Date()));
             else setOverride(r.id, 'datePaiementBrut', null);
+            renderFinanceSummary(); renderKPI(); renderPayroll(); renderCalendar();
+          } else {
+            setOverride(r.id, 'statutPaiementT1', cell.getValue());
+            const line = rawLignes.find(x=>x.id===r.id);
+            if(line) Object.assign(line, computeConsoFields(line.id, line.dateVente, line.statutCRM==='Introuvable (CRM)'?null:line.statutCRM, line.prelevement==='—'?null:line.prelevement));
+            renderFinance(); renderKPI();
           }
-          renderFinanceSummary(); renderKPI(); renderPayroll(); renderCalendar();
         }
       },
       {title:"Payé le", field:"Date_Paiement", width:150,
-        editor:"input", editable:cell=>canEditFinance() && cell.getData().Statut_Brut==='Payé',
+        editor:"input", editable:cell=>canEditFinance() && cell.getData().Type==='MINT' && cell.getData().Statut_Brut==='Payé',
         formatter:c=>{
           const r=c.getRow().getData();
           if(!c.getValue()) return '<span style="color:var(--ink-dim)">—</span>';
@@ -1751,19 +2026,31 @@ function renderFinance(){
       },
       {title:"Activation (DH)", field:"Activation", width:100, hozAlign:"right"},
       {title:"Statut Activation", field:"Statut_Activation", width:150,
-        editor:"list", editable:cell=>canEditFinance() && cell.getValue()!=='—' && !cell.getValue().startsWith('Payé — annulé'),
+        // Même verrouillage que « Statut Brut » ; pour CONSO cette colonne porte la tranche 2 (2 mois clos).
+        editor:"list", editable:cell=>canEditFinance() && cell.getValue()==='Non Payé',
         editorParams:{values:["Non Payé","Payé"]},
         formatter:c=>{
           const v=c.getValue();
           if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
           if(v.startsWith('Payé — annulé')) return `<span class="tag bad" title="Historique conservé : ce montant avait été payé avant l'annulation qualité — récupération à prévoir">${v}</span>`;
+          if(v==='Payé') return `<span class="tag ok" title="Verrouillé : un paiement ne peut être défait que via l'onglet Suivi Qualité (Annulation Qualité)">${v} 🔒</span>`;
+          if(v==='En attente') return `<span class="tag warn" title="Rémunération en attente : statut ≠ Signé ou prélèvement inactif">${v}</span>`;
+          if(v.startsWith('À venir')) return `<span style="color:var(--ink-dim)">${v}</span>`;
+          if(v.startsWith('Perdu')) return `<span class="tag bad" title="Tranche perdue : statuts non conformes à l'échéance des 2 mois — les 50% déjà versés restent acquis">${v}</span>`;
           return `<span class="tag ${v==='Payé'?'ok':'bad'}">${v}</span>`;
         },
         cellEdited:cell=>{
           const r = cell.getRow().getData();
-          if(cell.getValue()==='—') return;
-          setOverride(r.id, 'statutPaiementActivation', cell.getValue());
-          renderFinanceSummary(); renderKPI();
+          if(cell.getValue()!=='Payé' && cell.getValue()!=='Non Payé') return;
+          if(r.Type==='MINT'){
+            setOverride(r.id, 'statutPaiementActivation', cell.getValue());
+            renderFinanceSummary(); renderKPI();
+          } else {
+            setOverride(r.id, 'statutPaiementT2', cell.getValue());
+            const line = rawLignes.find(x=>x.id===r.id);
+            if(line) Object.assign(line, computeConsoFields(line.id, line.dateVente, line.statutCRM==='Introuvable (CRM)'?null:line.statutCRM, line.prelevement==='—'?null:line.prelevement));
+            renderFinance(); renderKPI();
+          }
         }
       },
       {title:"Décommissionné", field:"Decom_manuel", width:120, formatter:"tickCross", editor:"tickCross", editable:()=>canEditFinance(),
@@ -1787,6 +2074,126 @@ function renderFinance(){
   populateVendrediFilter();
   renderFinanceSummary();
   renderPayroll();
+  renderRegles();
+  renderDuParAgent();
+  renderConsoEcheancier();
+}
+
+/* ---- Agenda des règles financières (affichage + édition de la date d'entrée en vigueur du brut) ---- */
+function renderRegles(){
+  const el = document.getElementById('reglesContent');
+  if(!el) return;
+  const r = getRegles();
+  const canManage = currentRole && PERM[currentRole].manageState;
+  el.innerHTML = `
+    <div style="display:grid;gap:6px">
+      <div>• <b>Brut MINT (50 DH)</b> — applicable aux ventes à partir du <b style="color:var(--mint)">${fmtDate(parseDate(r.brutStartDate))}</b>${canManage ? ` <input type="date" id="regleBrutStart" value="${r.brutStartDate}" style="margin-left:8px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-family:var(--mono);font-size:12px">` : ''} <span style="color:var(--ink-dim)">— ventes antérieures : brut non dû, statut « — »</span></div>
+      <div>• <b>Activation MINT</b> — 150 DH dès que le statut CRM passe « Activé » (sans borne de date).</div>
+      <div>• <b>Clawback</b> — -150 DH si chute (Annulé / Rétracté / Résilié / Refusé) dans les <b>${r.clawbackMois} mois</b> suivant la vente et rien de payé ; si déjà payé → revue Qualité obligatoire.</div>
+      <div>• <b>ConsoPilote</b> — 100 DH au total, versés en 2 tranches conditionnées : paiement vérifié <b>uniquement</b> si statut « Signé » ET prélèvement « actif » (tout autre statut → rémunération en attente) ; <b>50% à J+${r.consoJourT1}</b> si conditions OK ; <b>50% restants une fois les ${r.consoMoisClos} mois clos</b> si les statuts sont toujours OK — sinon perdus, mais les 50% déjà versés restent acquis.</div>
+    </div>`;
+  const inp = document.getElementById('regleBrutStart');
+  if(inp){
+    inp.addEventListener('change', ()=>{
+      if(!inp.value) return;
+      const nr = getRegles(); nr.brutStartDate = inp.value; saveRegles(nr);
+      applyReglesToLignes();
+      setStatus('Règle mise à jour : brut MINT applicable aux ventes à partir du '+fmtDate(parseDate(nr.brutStartDate))+'.', 'ok');
+    });
+  }
+}
+
+/* ---- Reste à payer par agent (brut + activation + conso), avec retards ---- */
+function renderDuParAgent(){
+  const cont = document.getElementById('table-duagent');
+  if(!cont) return;
+  const todayMid = new Date(); todayMid.setHours(0,0,0,0);
+  const byAgent = {};
+  filteredLignes().forEach(l=>{
+    if(!byAgent[l.agent]) byAgent[l.agent] = {Agent:l.agent, Brut_du:0, Retard:0, Activ_du:0, Conso_du:0};
+    const a = byAgent[l.agent];
+    if(l.type==='MINT'){
+      if(l.decommissionne || l.tempPerdue) return;
+      if(l.brut>0 && l.statutPaiementBrut!=='Payé'){
+        a.Brut_du += l.brut;
+        const vp = toDateSafe(l.vendrediPaiement) || parseDate(l.vendrediPaiementStr||'');
+        if(vp && vp.getTime() < todayMid.getTime()) a.Retard += l.brut;
+      }
+      if(l.activation>0 && l.statutPaiementActivation!=='Payé') a.Activ_du += l.activation;
+    } else {
+      // CONSO : seules les tranches exigibles (échues + conditions OK) non payées sont dues
+      if(l.t1Due && l.statutPaiementT1!=='Payé') a.Conso_du += 50;
+      if(l.t2Due && l.statutPaiementT2!=='Payé') a.Conso_du += 50;
+    }
+  });
+  const data = Object.values(byAgent)
+    .map(a=>Object.assign({}, a, {Total_du: a.Brut_du + a.Activ_du + a.Conso_du}))
+    .filter(a=>a.Total_du>0)
+    .sort((x,y)=>y.Total_du-x.Total_du);
+  if(window.tDuAgent) window.tDuAgent.destroy();
+  window.tDuAgent = new Tabulator(cont, {
+    data, layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,340)+"px":"80px",
+    placeholder:"Rien à payer — tous les agents sont soldés.",
+    columns:[
+      {title:"Agent", field:"Agent", widthGrow:2},
+      {title:"Brut MINT dû (DH)", field:"Brut_du", hozAlign:"right", width:140},
+      {title:"dont en retard", field:"Retard", hozAlign:"right", width:130,
+        formatter:c=>c.getValue()>0?`<span class="tag bad">${c.getValue()} DH</span>`:'<span style="color:var(--ink-dim)">—</span>'},
+      {title:"Activation due (DH)", field:"Activ_du", hozAlign:"right", width:150},
+      {title:"Conso dû (DH)", field:"Conso_du", hozAlign:"right", width:130},
+      {title:"TOTAL dû (DH)", field:"Total_du", hozAlign:"right", width:130,
+        formatter:c=>`<b style="color:var(--amber)">${c.getValue()} DH</b>`}
+    ]
+  });
+}
+
+/* ---- Échéancier ConsoPilote : tranches (T1 J+45 / T2 2 mois clos) par état et par mois ---- */
+function renderConsoEcheancier(){
+  const cont = document.getElementById('table-consoech');
+  if(!cont) return;
+  const buckets = {};
+  let dejaExigible=0, dejaN=0, attente=0, attenteN=0, perdu=0, perduN=0;
+  filteredLignes().filter(l=>l.type==='CONSO').forEach(l=>{
+    [[l.statutPaiementT1, l.t1Due, l.t1Echue, l.t1Perdue, l.t1Date],
+     [l.statutPaiementT2, l.t2Due, l.t2Echue, l.t2Perdue, l.t2Date]].forEach(([st, due, echue, perdue, date])=>{
+      if(st==='Payé') return;
+      if(due && echue){ dejaExigible += 50; dejaN++; return; }
+      if(perdue){ perdu += 50; perduN++; return; }
+      if(!l.conditionsOK){ attente += 50; attenteN++; return; }
+      // conditions OK, tranche pas encore échue → projetée sur son mois d'échéance
+      const d = toDateSafe(date);
+      if(!d) return;
+      const k = d.toLocaleDateString('fr-FR', {month:'long', year:'numeric'});
+      if(!buckets[k]) buckets[k] = {Periode:k, Montant:0, Contrats:0, _s:new Date(d.getFullYear(), d.getMonth(), 1)};
+      buckets[k].Montant += 50;
+      buckets[k].Contrats++;
+    });
+  });
+  const data = [{Periode:'Déjà exigible (échéance passée, conditions OK, non payé)', Montant:dejaExigible, Contrats:dejaN, _s:new Date(0)}]
+    .concat(Object.values(buckets).sort((a,b)=>a._s-b._s))
+    .concat([
+      {Periode:'En attente (statut ≠ Signé ou prélèvement inactif)', Montant:attente, Contrats:attenteN},
+      {Periode:'Perdu (statuts KO à l\'échéance des 2 mois)', Montant:perdu, Contrats:perduN}
+    ])
+    .map(r=>({Periode:r.Periode, Montant:r.Montant, Contrats:r.Contrats}));
+  if(window.tConsoEch) window.tConsoEch.destroy();
+  window.tConsoEch = new Tabulator(cont, {
+    data, layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,300)+"px":"80px",
+    placeholder:"Aucune échéance Conso en attente.",
+    columns:[
+      {title:"Période", field:"Periode", widthGrow:2,
+        formatter:c=>{
+          const v = c.getValue();
+          if(v.startsWith('Déjà')) return `<b style="color:var(--red)">${v}</b>`;
+          if(v.startsWith('En attente')) return `<span style="color:var(--amber)">${v}</span>`;
+          if(v.startsWith('Perdu')) return `<span style="color:var(--ink-dim)">${v}</span>`;
+          return v.replace(/^./,ch=>ch.toUpperCase());
+        }},
+      {title:"Échéances", field:"Contrats", hozAlign:"center", width:110},
+      {title:"Montant (DH)", field:"Montant", hozAlign:"right", width:140,
+        formatter:c=>`<b>${c.getValue()} DH</b>`}
+    ]
+  });
 }
 
 function populateVendrediFilter(){
@@ -1828,7 +2235,8 @@ function recomputeAndRerender(){
 
 function renderPayroll(){
   const byVendredi = {};
-  rawLignes.filter(l=>l.type==='MINT' && !l.decommissionne).forEach(l=>{
+  // seules les ventes avec un brut réellement dû (règle d'agenda + introuvables suspendues exclues)
+  filteredLignes().filter(l=>l.type==='MINT' && !l.decommissionne && !l.tempPerdue && l.brut>0).forEach(l=>{
     const key = l.vendrediPaiementStr || '—';
     if(!byVendredi[key]) byVendredi[key] = {Vendredi:key, Contrats:0, Brut_a_payer:0, Brut_paye:0};
     byVendredi[key].Contrats++;
@@ -1846,6 +2254,15 @@ function renderPayroll(){
   window.tPayroll = new Tabulator(tbl, {
     data, layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,320)+"px":"80px",
     placeholder:"Aucune échéance — importez un fichier.",
+    rowFormatter:row=>{
+      const d = row.getData();
+      const vd = parseDate(d.Vendredi);
+      const t = new Date(); t.setHours(0,0,0,0);
+      if(d.Brut_a_payer>0 && vd && vd.getTime() < t.getTime()){
+        row.getElement().style.boxShadow = 'inset 3px 0 0 var(--red)';
+        row.getElement().title = 'Échéance dépassée — brut en retard de paiement';
+      }
+    },
     columns:[
       {title:"Vendredi de paie", field:"Vendredi", widthGrow:1, formatter:c=>{
         const v=c.getValue();
@@ -1862,49 +2279,94 @@ function renderPayroll(){
 function renderFinanceSummary(){
   const box = document.getElementById('finance-summary');
   let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0, avances=0;
+  let retardDH=0, retardN=0, recupDH=0, consoAttente=0, consoPerdu=0, introuvableDH=0, introuvableN=0;
   const prochainVendredi = fmtDate(nextFriday(new Date()));
   let brutVendrediProchain = 0;
+  const todayMid = new Date(); todayMid.setHours(0,0,0,0);
 
-  rawLignes.forEach(l=>{
+  filteredLignes().forEach(l=>{
     if(l.type==='MINT'){
+      // créance : montants déjà versés sur des contrats annulés (décommissionnés ou en revue qualité)
+      if(l.decommissionne || l.needsQualityReview){
+        if(l.statutPaiementBrut==='Payé') recupDH += l.brut;
+        if(l.statutPaiementActivation==='Payé') recupDH += l.activation;
+      }
       if(l.decommissionne){ decom += (l.brut+l.activation); return; }
+      // introuvable en attente de décision manager : commissions suspendues, hors de tous les dûs
+      if(l.tempPerdue){ introuvableDH += l.brut; introuvableN++; return; }
       if(l.statutPaiementBrut==='Payé'){
         brutPaye += l.brut;
         if(isAvance(l)) avances += l.brut;
-      } else {
+      } else if(l.brut>0){
         brutDu += l.brut;
         if(l.vendrediPaiementStr===prochainVendredi) brutVendrediProchain += l.brut;
+        const vp = toDateSafe(l.vendrediPaiement) || parseDate(l.vendrediPaiementStr||'');
+        if(vp && vp.getTime() < todayMid.getTime()){ retardDH += l.brut; retardN++; }
       }
       if(l.activation>0){
         if(l.statutPaiementActivation==='Payé') activPaye += l.activation; else activDu += l.activation;
       }
     } else {
-      if(l.statutPaiement==='Payé') consoPaye += l.net; else consoDu += l.net;
+      // CONSO : ventilation par tranche selon la règle (Signé + prélèvement actif, J+45 / 2 mois clos)
+      [[l.statutPaiementT1, l.t1Due, l.t1Perdue], [l.statutPaiementT2, l.t2Due, l.t2Perdue]].forEach(([st, due, perdue])=>{
+        if(st==='Payé') consoPaye += 50;
+        else if(due) consoDu += 50;
+        else if(perdue) consoPerdu += 50;
+        else consoAttente += 50;
+      });
     }
   });
 
+  const totalDu = brutDu + activDu + consoDu;
   box.innerHTML = `
+    <div class="stat-card red"><div class="label">⚠ Brut en retard (vendredis échus)</div><div class="value">${retardDH} DH · ${retardN} ct</div></div>
     <div class="stat-card red"><div class="label">Brut MINT — vendredi ${prochainVendredi}</div><div class="value">${brutVendrediProchain} DH</div></div>
+    <div class="stat-card amber"><div class="label">TOTAL à payer (brut+activ+conso)</div><div class="value">${totalDu} DH</div></div>
     <div class="stat-card mint"><div class="label">Brut MINT à payer (total)</div><div class="value">${brutDu} DH</div></div>
     <div class="stat-card blue"><div class="label">Brut MINT payé</div><div class="value">${brutPaye} DH</div></div>
     <div class="stat-card amber"><div class="label">dont Avances (payé avant échéance)</div><div class="value">${avances} DH</div></div>
     <div class="stat-card amber"><div class="label">Activation MINT à payer</div><div class="value">${activDu} DH</div></div>
     <div class="stat-card blue"><div class="label">Activation MINT payée</div><div class="value">${activPaye} DH</div></div>
-    <div class="stat-card amber"><div class="label">CONSO à payer</div><div class="value">${consoDu} DH</div></div>
+    <div class="stat-card amber"><div class="label">CONSO à payer (exigible)</div><div class="value">${consoDu} DH</div></div>
     <div class="stat-card blue"><div class="label">CONSO payé</div><div class="value">${consoPaye} DH</div></div>
+    <div class="stat-card amber"><div class="label">CONSO en attente (conditions)</div><div class="value">${consoAttente} DH</div></div>
+    <div class="stat-card red"><div class="label">CONSO perdu (statut KO)</div><div class="value">${consoPerdu} DH</div></div>
+    <div class="stat-card amber"><div class="label">⚠ Introuvables — décision requise</div><div class="value">${introuvableDH} DH · ${introuvableN} ct</div></div>
+    <div class="stat-card red"><div class="label">À récupérer (payé sur annulé)</div><div class="value">${recupDH} DH</div></div>
     <div class="stat-card red"><div class="label">Décommissionné (clawback)</div><div class="value">${decom} DH</div></div>
   `;
 }
 
+// Catégorise le statut CRM d'une vente MINT en motif de chute qualité (indépendant du
+// clawback financier : une chute reste comptée même hors fenêtre des 3 mois ou déjà payée).
+function classifyChuteMotif(statutCRM){
+  const etat = norm(statutCRM);
+  if(/annul/.test(etat)) return 'Annulée';
+  if(/retract/.test(etat)) return 'Rétractée';
+  if(/resil/.test(etat)) return 'Résiliée';
+  if(/refus/.test(etat)) return 'Refusée';
+  return null;
+}
+
 function renderKPI(){
   const byAgent = {};
-  rawLignes.forEach(l=>{
+  filteredLignes().forEach(l=>{
     const key = l.agent;
-    if(!byAgent[key]) byAgent[key] = {Agent:key, Ventes_MINT:0, Ventes_CONSO:0, Activees:0, Decommissionnees:0, Net_Total:0};
+    if(!byAgent[key]) byAgent[key] = {
+      Agent:key, Ventes_MINT:0, Ventes_CONSO:0, Activees:0,
+      Annulees:0, Retractees:0, Resiliees:0, Refusees:0, Chutes:0,
+      Decommissionnees:0, Net_Total:0
+    };
     if(l.type==='MINT'){
       byAgent[key].Ventes_MINT++;
       if(l.activation>0) byAgent[key].Activees++;
       if(l.decommissionne) byAgent[key].Decommissionnees++;
+      const motif = classifyChuteMotif(l.statutCRM);
+      if(motif==='Annulée') byAgent[key].Annulees++;
+      else if(motif==='Rétractée') byAgent[key].Retractees++;
+      else if(motif==='Résiliée') byAgent[key].Resiliees++;
+      else if(motif==='Refusée') byAgent[key].Refusees++;
+      if(motif) byAgent[key].Chutes++;
       byAgent[key].Net_Total += l.net;
     } else {
       byAgent[key].Ventes_CONSO++;
@@ -1914,6 +2376,7 @@ function renderKPI(){
   const data = Object.values(byAgent).map(a=>({
     ...a,
     Taux_Activation: a.Ventes_MINT ? Math.round(100*a.Activees/a.Ventes_MINT)+'%' : '—',
+    Taux_Chute: a.Ventes_MINT ? Math.round(100*a.Chutes/a.Ventes_MINT)+'%' : '—',
     Taux_Decommission: a.Ventes_MINT ? Math.round(100*a.Decommissionnees/a.Ventes_MINT)+'%' : '—'
   })).sort((a,b)=>b.Net_Total-a.Net_Total);
 
@@ -1925,23 +2388,42 @@ function renderKPI(){
       {title:"Ventes MINT", field:"Ventes_MINT", hozAlign:"center"},
       {title:"Ventes ConsoPilote", field:"Ventes_CONSO", hozAlign:"center"},
       {title:"Taux Activation MINT", field:"Taux_Activation", hozAlign:"center"},
-      {title:"Taux Décommission", field:"Taux_Decommission", hozAlign:"center"},
+      {title:"Annulées", field:"Annulees", hozAlign:"center", formatter:c=>c.getValue()>0?`<span class="tag bad">${c.getValue()}</span>`:'0'},
+      {title:"Rétractées", field:"Retractees", hozAlign:"center", formatter:c=>c.getValue()>0?`<span class="tag bad">${c.getValue()}</span>`:'0'},
+      {title:"Résiliées", field:"Resiliees", hozAlign:"center", formatter:c=>c.getValue()>0?`<span class="tag bad">${c.getValue()}</span>`:'0'},
+      {title:"Refusées", field:"Refusees", hozAlign:"center", formatter:c=>c.getValue()>0?`<span class="tag bad">${c.getValue()}</span>`:'0'},
+      {title:"Total Chutes", field:"Chutes", hozAlign:"center", formatter:c=>`<b>${c.getValue()}</b>`},
+      {title:"Taux de Chute", field:"Taux_Chute", hozAlign:"center",
+        formatter:c=>{ const n=parseInt(c.getValue()); return `<span class="tag ${n>=30?'bad':n>=15?'warn':'ok'}">${c.getValue()}</span>`; }},
+      {title:"Taux Décommission (clawback)", field:"Taux_Decommission", hozAlign:"center",
+        formatter:c=>`<span title="Part des ventes annulées avec récupération financière effective (fenêtre 3 mois, non payées)">${c.getValue()}</span>`},
       {title:"Net généré (DH)", field:"Net_Total", hozAlign:"right", formatter:c=>`<b>${c.getValue()} DH</b>`}
     ]
   });
 }
 
+const INTROUVABLE_LABELS = {
+  attente: 'En attente de décision',
+  retrouvee: 'Retrouvée (client a confirmé)',
+  perdue: 'Perdue définitivement → Annulée'
+};
 function renderAlertes(){
-  const data = rawLignes.filter(l=>l.type==='MINT' && (l.needsQualityReview || l.pending || (l.moisEcoules!==null && l.moisEcoules>=2 && l.moisEcoules<=3 && !l.decommissionne))).map(l=>({
-    Agent:l.agent, Contrat:l.contrat, Date:l.dateVenteStr, Statut_CRM:l.statutCRM,
+  const data = filteredLignes().filter(l=>l.type==='MINT' && (l.needsQualityReview || l.tempPerdue || l.pending || (l.moisEcoules!==null && l.moisEcoules>=2 && l.moisEcoules<=3 && !l.decommissionne))).map(l=>({
+    id:l.id, Agent:l.agent, Contrat:l.contrat, Date:l.dateVenteStr, Statut_CRM:l.statutCRM,
     Alerte: l.needsQualityReview ? 'Annulation CRM après paiement — décision Qualité requise'
+          : l.tempPerdue ? 'Introuvable — décision manager requise (recherche client ?)'
           : l.pending ? 'Non rapproché avec le CRM'
           : `Échéance clawback dans ${3-l.moisEcoules} mois`,
-    _priorite: l.needsQualityReview ? 0 : (l.pending ? 1 : 2)
+    Introuvable: !!l.introuvable,
+    Decision: l.introuvable ? INTROUVABLE_LABELS[l.introuvableDecision || 'attente'] : '—',
+    _priorite: (l.needsQualityReview || l.tempPerdue) ? 0 : (l.pending ? 1 : 2)
   })).sort((a,b)=>a._priorite-b._priorite);
   if(tAlertes) tAlertes.destroy();
   tAlertes = new Tabulator("#table-alertes", {
     data, layout:"fitDataStretch", height:"320px", placeholder:"Aucune alerte active.",
+    rowFormatter:row=>{
+      if(row.getData().Alerte.includes('décision manager requise')) row.getElement().style.boxShadow = 'inset 3px 0 0 var(--amber)';
+    },
     columns:[
       {title:"Agent", field:"Agent", widthGrow:2},
       {title:"Contrat", field:"Contrat", width:120},
@@ -1950,27 +2432,52 @@ function renderAlertes(){
       {title:"Alerte", field:"Alerte", widthGrow:2, formatter:c=>{
         const cls = c.getValue().includes('Qualité requise') ? 'bad' : 'warn';
         return `<span class="tag ${cls}">${c.getValue()}</span>`;
-      }}
+      }},
+      {title:"Décision Introuvable", field:"Decision", width:220,
+        // décision réservée au manager (Super Admin / Directeur), uniquement sur les ventes introuvables
+        editor:"list", editable:cell=>canEditFinance() && cell.getRow().getData().Introuvable,
+        editorParams:{values:Object.values(INTROUVABLE_LABELS)},
+        formatter:c=>{
+          const v = c.getValue();
+          if(v==='—') return '<span style="color:var(--ink-dim)">—</span>';
+          if(v===INTROUVABLE_LABELS.attente) return `<span class="tag warn">${v}</span>`;
+          if(v===INTROUVABLE_LABELS.retrouvee) return `<span class="tag ok">${v}</span>`;
+          return `<span class="tag bad">${v}</span>`;
+        },
+        cellEdited:cell=>{
+          const r = cell.getRow().getData();
+          const key = Object.keys(INTROUVABLE_LABELS).find(k=>INTROUVABLE_LABELS[k]===cell.getValue());
+          if(!key || !r.Introuvable) return;
+          applyIntrouvableDecision(r.id, key);
+          setStatus(key==='perdue'
+            ? `Contrat ${r.Contrat} : introuvable perdu définitivement → statut Annulée appliqué.`
+            : key==='retrouvee'
+              ? `Contrat ${r.Contrat} : retrouvé — remis en circuit, statut réattribué au prochain import CRM.`
+              : `Contrat ${r.Contrat} : remis en attente de décision.`, key==='perdue' ? 'warn' : 'ok');
+        }
+      }
     ]
   });
 }
 
 function populateAgentFilter(){
-  const agents = [...new Set(rawLignes.map(l=>l.agent))].sort();
+  const agents = [...new Set(filteredLignes().map(l=>l.agent))].sort();
   const sel = document.getElementById('filterAgent');
-  sel.innerHTML = '<option value="">Tous les agents</option>' + agents.map(a=>`<option value="${a}">${a}</option>`).join('');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">Tous les agents</option>' + agents.map(a=>`<option value="${a}" ${a===cur?'selected':''}>${a}</option>`).join('');
 }
 
 /* ============================= SUIVI QUALITÉ (aucune donnée financière) ============================= */
 function renderQualite(){
   if(!rawLignes.length) return;
-  const agents = [...new Set(rawLignes.filter(l=>l.type==='MINT').map(l=>l.agent))].sort();
+  const L = filteredLignes();
+  const agents = [...new Set(L.filter(l=>l.type==='MINT').map(l=>l.agent))].sort();
   const selAgent = document.getElementById('qualiteFilterAgent');
   const curAgent = selAgent.value;
   selAgent.innerHTML = '<option value="">Tous les agents</option>' + agents.map(a=>`<option value="${a}">${a}</option>`).join('');
   selAgent.value = curAgent;
 
-  const data = rawLignes.filter(l=>l.type==='MINT').map(l=>{
+  const data = L.filter(l=>l.type==='MINT').map(l=>{
     const o = overrides[l.id]||{};
     return {
       id:l.id, Agent:l.agent, Date:l.dateVenteStr, Contrat:l.contrat,
@@ -2031,7 +2538,7 @@ function renderQualite(){
 /* ============================= MES VENTES (accès agent, lecture seule, personnalisé) ============================= */
 function renderMesVentes(){
   if(!rawLignes.length || currentRole!=='agent' || !currentAgentName) return;
-  const mine = rawLignes.filter(l => norm(l.agent) === norm(currentAgentName));
+  const mine = filteredLignes().filter(l => norm(l.agent) === norm(currentAgentName));
   document.getElementById('mesVentesAgentLabel').textContent = '— ' + currentAgentName + (mine.length ? '' : ' (aucune vente trouvée : vérifiez l\'orthographe exacte de votre nom auprès de votre manager)');
 
   let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0;
@@ -2041,7 +2548,9 @@ function renderMesVentes(){
       if(l.statutPaiementBrut==='Payé') brutPaye+=l.brut; else brutDu+=l.brut;
       if(l.activation>0){ if(l.statutPaiementActivation==='Payé') activPaye+=l.activation; else activDu+=l.activation; }
     } else {
-      if(l.statutPaiement==='Payé') consoPaye+=l.net; else consoDu+=l.net;
+      [[l.statutPaiementT1, l.t1Due], [l.statutPaiementT2, l.t2Due]].forEach(([st, due])=>{
+        if(st==='Payé') consoPaye += 50; else if(due) consoDu += 50;
+      });
     }
   });
   document.getElementById('mesventes-summary').innerHTML = `
@@ -2057,8 +2566,8 @@ function renderMesVentes(){
     Activation:l.activation, Statut_Activation:(l.activation===0||l.decommissionne)?'—':l.statutPaiementActivation,
     Decommissionne:l.decommissionne?'OUI':'NON'
   } : {
-    Type:'CONSO', Date:l.dateVenteStr, Contrat:l.contrat, Statut_CRM:'—',
-    Brut:l.signature, Statut_Brut:l.statutPaiement, Activation:l.m1+l.m2, Statut_Activation:'—', Decommissionne:'NON'
+    Type:'CONSO', Date:l.dateVenteStr, Contrat:l.contrat, Statut_CRM:l.statutCRM,
+    Brut:l.t1, Statut_Brut:consoTrancheDisplay(l,1), Activation:l.t2, Statut_Activation:consoTrancheDisplay(l,2), Decommissionne:l.t2Perdue?'T2 perdue':'NON'
   });
   if(tMesVentes) tMesVentes.destroy();
   tMesVentes = new Tabulator("#table-mesventes", {
@@ -2069,9 +2578,21 @@ function renderMesVentes(){
       {title:"Contrat", field:"Contrat", width:110},
       {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
       {title:"Brut/Signature (DH)", field:"Brut", width:140, hozAlign:"right"},
-      {title:"Statut Brut", field:"Statut_Brut", width:120, formatter:c=>c.getValue()==='—'?'—':`<span class="tag ${c.getValue()==='Payé'?'ok':'bad'}">${c.getValue()}</span>`},
+      {title:"Statut Brut", field:"Statut_Brut", width:130, formatter:c=>{
+        const v=c.getValue();
+        if(v==='—') return '—';
+        if(v==='Payé') return '<span class="tag ok">Payé</span>';
+        if(v==='Non Payé') return '<span class="tag bad">Non Payé</span>';
+        return `<span style="color:var(--ink-dim)">${v}</span>`;
+      }},
       {title:"Activation/Échéances (DH)", field:"Activation", width:160, hozAlign:"right"},
-      {title:"Statut Activation", field:"Statut_Activation", width:130, formatter:c=>c.getValue()==='—'?'—':`<span class="tag ${c.getValue()==='Payé'?'ok':'bad'}">${c.getValue()}</span>`},
+      {title:"Statut Activation", field:"Statut_Activation", width:140, formatter:c=>{
+        const v=c.getValue();
+        if(v==='—') return '—';
+        if(v==='Payé') return '<span class="tag ok">Payé</span>';
+        if(v==='Non Payé') return '<span class="tag bad">Non Payé</span>';
+        return `<span style="color:var(--ink-dim)">${v}</span>`;
+      }},
       {title:"Décommissionné", field:"Decommissionne", width:120}
     ]
   });
@@ -2112,7 +2633,9 @@ function renderMesVentes(){
       byMonth[k].Paye += paye; byMonth[k].Du += (l.net-paye);
     } else {
       byMonth[k].Net += l.net;
-      if(l.statutPaiement==='Payé') byMonth[k].Paye += l.net; else byMonth[k].Du += l.net;
+      [[l.statutPaiementT1, l.t1Due], [l.statutPaiementT2, l.t2Due]].forEach(([st, due])=>{
+        if(st==='Payé') byMonth[k].Paye += 50; else if(due) byMonth[k].Du += 50;
+      });
     }
   });
   const monthData = Object.values(byMonth).sort((a,b)=>a._sort-b._sort).map(({_sort,...r})=>r);
@@ -2150,8 +2673,10 @@ function jumpWeek(deltaDays){
 // agrège toutes les lignes MINT non décommissionnées par vendredi de paie
 function buildCalendarStats(){
   const byDay = {}; // key "DD/MM/YYYY" -> {brutDu, brutPaye, decomCount, byAgent:{}}
-  rawLignes.forEach(l=>{
+  filteredLignes().forEach(l=>{
     if(l.type!=='MINT' || !l.vendrediPaiement) return;
+    if(l.brut===0 && !l.decommissionne) return; // règle d'agenda : pas de brut dû avant l'entrée en vigueur
+    if(l.tempPerdue) return; // introuvable en attente de décision : suspendue, hors calendrier
     const key = l.vendrediPaiementStr;
     if(!byDay[key]) byDay[key] = {brutDu:0, brutPaye:0, decomCount:0, byAgent:{}};
     const day = byDay[key];
@@ -2247,8 +2772,14 @@ function renderCalendarDetail(dateStr){
 
 function bulkSetFriday(dateStr, value){
   if(!canEditFinance()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
+  let locked = 0;
   rawLignes.forEach(l=>{
     if(l.type==='MINT' && l.vendrediPaiementStr===dateStr && !l.decommissionne){
+      // règle d'agenda : pas de brut dû (vente antérieure à l'entrée en vigueur) → rien à marquer
+      if(l.brut===0) return;
+      // Même règle métier que la colonne Statut Brut de l'onglet Trésorerie : un contrat déjà
+      // Payé ne peut pas être repassé Non Payé en masse — seul l'onglet Qualité peut défaire un paiement.
+      if(value==='Non Payé' && l.statutPaiementBrut==='Payé'){ locked++; return; }
       setOverride(l.id, 'statutPaiementBrut', value);
       setOverride(l.id, 'datePaiementBrut', value==='Payé' ? fmtDate(new Date()) : null);
     }
@@ -2257,6 +2788,7 @@ function bulkSetFriday(dateStr, value){
   renderKPI();
   renderCalendar();
   renderCalendarDetail(dateStr);
+  if(locked>0) showError(`${locked} contrat(s) déjà Payé n'ont pas été réinitialisés — passez par l'onglet Suivi Qualité pour défaire un paiement.`);
   const today = new Date();
   const dueDate = parseDate(dateStr);
   const isEarly = value==='Payé' && dueDate && today < dueDate;
@@ -2296,9 +2828,11 @@ document.getElementById('exportFinanceBtn').addEventListener('click', ()=>{
     Decommissionne: l.decommissionne?'OUI':'NON', Net:l.net
   } : {
     Type:'CONSO', Agent:l.agent, Date_Vente:l.dateVenteStr, Vendredi_Paie:'', Contrat:l.contrat,
-    Statut_CRM:'', Signature:l.signature, Statut_Brut:l.statutPaiement,
+    Statut_CRM:l.statutCRM, Prelevement:l.prelevement,
+    Brut:l.t1, Statut_Brut:consoTrancheDisplay(l,1),
     Date_Paiement_Brut:'', Avance:'NON',
-    M1:l.m1, M2:l.m2, Net:l.net
+    Activation:l.t2, Statut_Activation:consoTrancheDisplay(l,2),
+    Decommissionne: l.t2Perdue ? 'T2 perdue' : 'NON', Net:l.net
   });
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();

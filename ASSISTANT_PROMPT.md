@@ -29,6 +29,11 @@ Tu es un assistant technique dédié au projet SIPP. Avant chaque action, procè
 
 ## Dernière intervention
 - 2026-07-15 : correction d'une faille dans `compare_expected.js` (`validateBusinessRules`) — voir détail dans `CAHIER_DE_CHARGES.md` § Journal des Correctifs.
+- 2026-07-15 : verrouillage des colonnes Statut Brut/Statut Activation de l'onglet Trésorerie et du bouton Calendrier « Réinitialiser Non Payé » — un contrat Payé ne peut plus être repassé Non Payé que via l'onglet Suivi Qualité. Voir `CAHIER_DE_CHARGES.md` § Journal des Correctifs.
+- 2026-07-15 : ajout du détail des chutes par motif (Annulé/Rétracté/Résilié/Refusé) et du taux de chute dans l'onglet KPI Agents, conforme à l'exigence « KPI : taux de chute par agent ». Faille latente identifiée mais non corrigée : `compare_expected.js` référence `window.rawLignes`, qui n'existe jamais (déclaration `let` non attachée à `window`) — voir `CAHIER_DE_CHARGES.md` § Journal des Correctifs pour le correctif à faire.
+- 2026-07-15 : nouvelle règle métier — le brut MINT 50 DH ne s'applique qu'aux ventes à partir du 01/07/2026, via le nouvel « Agenda des règles financières » (bornage des dates, date modifiable, persistée). Onglet Trésorerie enrichi : cartes retard/total/à récupérer, retards surlignés, reste à payer par agent, échéancier ConsoPilote. Toute règle financière future DOIT être bornée dans le temps via cet agenda (`getRegles()`). Voir `CAHIER_DE_CHARGES.md` § Journal des Correctifs.
+- 2026-07-15 : REFONTE de la rémunération ConsoPilote (remplace l'ancien barème 100+50+50) — total 100 DH en 2 tranches : paiement vérifié uniquement si statut « Signé » ET prélèvement « actif » (Feuil2), sinon en attente ; 50% à J+45 ; 50% aux 2 mois clos si statuts toujours OK, sinon perdus (tranches payées acquises). Voir `computeConsoFields()` dans `index.html` et le Journal des Correctifs.
+- 2026-07-15 : nouvelle règle « Introuvable » MINT (décision manager obligatoire dans l'onglet Alertes : Retrouvée / Perdue→Annulée / En attente) + filtre de période global (jour/semaine/mois/trimestre/semestre/année/vendredi) appliqué à tous les onglets sauf pour l'agent. Voir Journal des Correctifs.
 
 ## DOCUMENT DE RÉFÉRENCE : SIPP (Système d'Information de Pilotage de Performance)
 
