@@ -318,7 +318,10 @@
       <div id="table-consoech" class="table-scroll"></div>
     </div>
     <div class="panel">
-      <h2>Détail par contrat <span class="sub">— éditez « Statut Brut », « Statut Activation » et « Décommissionné » directement dans le tableau. Marquer « Payé » avant le vendredi de paie officiel = avance, automatiquement signalée.</span></h2>
+      <h2>Détail par contrat <span class="sub">— éditez « Statut Brut », « Statut Activation » et « Refus Qualité » directement dans le tableau. Marquer « Payé » avant le vendredi de paie officiel = avance, automatiquement signalée.</span></h2>
+      <div class="legend" style="margin-top:0;margin-bottom:10px">
+        <b>Brut</b> = 50 DH par vente MINT, toujours dû (sauf refus Qualité explicite). <b>Activation</b> = 150 DH dès statut « Activé », décommissionnée automatiquement si le statut repasse négatif dans les 3 mois. <b>Net</b> = Brut + Activation − Décommissionnement — c'est le montant réellement dû à l'agent.
+      </div>
       <div class="filters">
         <select id="filterAgent"><option value="">Tous les agents</option></select>
         <select id="filterType"><option value="">MINT + ConsoPilote</option><option value="MINT">MINT seul</option><option value="CONSO">ConsoPilote seul</option></select>
@@ -387,7 +390,7 @@
   <div class="tab" id="tab-negatif">
     <div class="summary-grid" id="negatif-summary"></div>
     <div class="panel">
-      <h2>Analyse des pertes <span class="sub">— Règle A (MINT, brut) : statut ≠ En attente / En attente de caution / Activé → perte 100% du brut. Règle B (ConsoPilote) : statut ≠ Signé / Actif → perte 50% de la commission attendue.</span></h2>
+      <h2>Analyse des pertes <span class="sub">— Règle A (MINT) : perte = montant réellement décommissionné (Activation 150 DH en cas de chute automatique et/ou Brut 50 DH en cas de refus Qualité explicite — le Brut n'est jamais perdu automatiquement). Règle B (ConsoPilote) : statut ≠ Signé / Actif → perte 50% de la commission attendue.</span></h2>
       <div class="filters">
         <select id="negatifFilterMarque"><option value="">MINT + ConsoPilote</option><option value="MINT">MINT seul (Règle A)</option><option value="CONSO">ConsoPilote seul (Règle B)</option></select>
         <select id="negatifFilterAgent"><option value="">Tous les agents</option></select>
@@ -1291,6 +1294,7 @@ function autoDetectAndProcess(){
       sheetName: src.sheetName
     }));
     buildLignes(aBodies, statusMap, statusSources.length > 0);
+    harmoniseAgentNames(); // dédoublonnage automatique des noms d'agent (similitude ≥80%)
     renderAll();
 
     const uniqueA = aSources.map(src => `${src.fileName}:${src.sheetName}`).join(' ; ');
@@ -1501,22 +1505,25 @@ function applyIntrouvableDecision(id, dec){
   l.introuvableDecision = dec;
   const wasBrutPaid = l.statutPaiementBrut==='Payé';
   const wasActivPaid = l.statutPaiementActivation==='Payé';
+  let cb;
   if(dec==='perdue'){
     l.statutCRM = 'Annulée (introuvable — perdue définitivement)';
     l.tempPerdue = false;
-    const withinClawback = l.moisEcoules!==null && l.moisEcoules<=getRegles().clawbackMois;
-    l.decommissionAuto = withinClawback && !wasBrutPaid && !wasActivPaid;
-    l.needsQualityReview = (wasBrutPaid || wasActivPaid) && !l.decommissionManuel;
+    // « Perdue » = une chute comme une autre : réévaluée via la même règle de clawback (brut protégé,
+    // activation reprise auto) — ce n'est PAS un refus qualité, donc le brut n'est pas concerné.
+    cb = computeMintClawback(l.statutCRM, l.moisEcoules, l.decommissionManuel, wasBrutPaid);
   } else {
     l.statutCRM = 'Introuvable (CRM)';
     l.tempPerdue = (dec!=='retrouvee');
-    l.decommissionAuto = false;
-    l.needsQualityReview = false;
+    cb = { decommissionActivationAuto:false, brutAnnule:!!l.decommissionManuel, activationAnnule:!!l.decommissionManuel, needsQualityReview:false };
   }
-  l.decommissionne = l.decommissionAuto || l.decommissionManuel;
-  if(!wasBrutPaid && l.brut>0) l.statutPaiementBrut = l.tempPerdue ? '—' : ((overrides[id].statutPaiementBrut && overrides[id].statutPaiementBrut!=='—') ? overrides[id].statutPaiementBrut : 'Non Payé');
+  l.decommissionAuto = cb.decommissionActivationAuto;
+  l.brutAnnule = cb.brutAnnule;
+  l.decommissionne = cb.activationAnnule;
+  l.needsQualityReview = cb.needsQualityReview;
+  if(!wasBrutPaid && l.brut>0) l.statutPaiementBrut = (l.tempPerdue || cb.brutAnnule) ? '—' : ((overrides[id].statutPaiementBrut && overrides[id].statutPaiementBrut!=='—') ? overrides[id].statutPaiementBrut : 'Non Payé');
   if(!wasActivPaid) l.statutPaiementActivation = l.tempPerdue ? '—' : (l.statutPaiementActivation==='—' ? 'Non Payé' : l.statutPaiementActivation);
-  l.net = (l.decommissionne || l.tempPerdue) ? 0 : (l.brut + l.activation);
+  l.net = l.tempPerdue ? 0 : ((cb.brutAnnule?0:l.brut) + (cb.activationAnnule?0:l.activation));
   autoSaveLine(id); // Fonctionnalité 4 : persistance immédiate de la décision manager
   renderAll();
 }
@@ -1538,12 +1545,20 @@ function applyReglesToLignes(){
       l.tempPerdue = introuvable && dec==='attente';
       const wasBrutPaid = l.statutPaiementBrut==='Payé';
       const wasActivPaid = l.statutPaiementActivation==='Payé';
+      // Clawback : brut jamais repris automatiquement (seule la Qualité peut l'annuler via
+      // decommissionManuel) ; activation reprise automatiquement dès chute dans la fenêtre — voir
+      // computeMintClawback() pour le détail de la règle.
+      const cb = computeMintClawback(l.statutCRM, l.moisEcoules, o.decommissionManuel, wasBrutPaid);
+      l.decommissionAuto = cb.decommissionActivationAuto;
+      l.brutAnnule = cb.brutAnnule;
+      l.decommissionne = cb.activationAnnule;
+      l.needsQualityReview = cb.needsQualityReview;
       if(!eligible){ l.statutPaiementBrut = '—'; }
-      else if(l.tempPerdue && !wasBrutPaid){ l.statutPaiementBrut = '—'; }
+      else if((l.tempPerdue || cb.brutAnnule) && !wasBrutPaid){ l.statutPaiementBrut = '—'; }
       else if(l.statutPaiementBrut==='—'){ l.statutPaiementBrut = o.statutPaiementBrut || 'Non Payé'; }
       if(l.tempPerdue && !wasActivPaid) l.statutPaiementActivation = '—';
       else if(l.statutPaiementActivation==='—' && !l.tempPerdue) l.statutPaiementActivation = o.statutPaiementActivation || 'Non Payé';
-      l.net = (l.decommissionne || l.tempPerdue) ? 0 : (l.brut + l.activation);
+      l.net = l.tempPerdue ? 0 : ((cb.brutAnnule?0:l.brut) + (cb.activationAnnule?0:l.activation));
     } else if(l.type==='CONSO'){
       const etat = (l.statutCRM && l.statutCRM!=='Introuvable (CRM)') ? l.statutCRM : null;
       const prelev = (l.prelevement && l.prelevement!=='—') ? l.prelevement : null;
@@ -1554,6 +1569,8 @@ function applyReglesToLignes(){
       Object.assign(l, fields);
     }
   });
+  // dédoublonnage automatique : couvre aussi les sessions importées avant l'introduction de ce mapping
+  harmoniseAgentNames();
   renderAll();
 }
 
@@ -1917,6 +1934,112 @@ function mergeStringField(existing, candidate){
   if(candidate.includes(existing)) return candidate;
   return `${existing} / ${candidate}`;
 }
+/* ============================= CLAWBACK MINT (brut protégé / activation récupérable) =============================
+   Règle confirmée par la Direction (2026-07-16) : une vente MINT vaut 200 DH répartis en 50 DH BRUT +
+   150 DH ACTIVATION.
+   - BRUT : toujours dû quelle que soit l'évolution du statut CRM — SEULE exception : la Qualité statue
+     explicitement "Annulation/Refus Qualité" (case à cocher `decommissionManuel`). Le brut n'est JAMAIS
+     repris automatiquement par l'algorithme, peu importe le statut CRM ou la fenêtre de 3 mois.
+   - ACTIVATION : attribuée dès que le statut passe « Activé », décommissionnée AUTOMATIQUEMENT (sans
+     validation Qualité) dès que le statut repasse en négatif (Annulé/Rétracté/Résilié/Refusé) dans la
+     fenêtre de suivi (3 mois par défaut, agenda des règles).
+   `needsQualityReview` sert uniquement à signaler qu'un BRUT déjà payé se trouve sur un contrat qui a
+   chuté — c'est la seule situation où une somme déjà versée à l'agent pourrait devoir être reprise, ce
+   qui exige une décision manuelle explicite (jamais automatique). */
+function computeMintClawback(statutCRM, moisEcoules, decommissionManuel, wasBrutPaid){
+  const etatN = norm(statutCRM);
+  const isChute = /annul|resil|retract|refus/.test(etatN);
+  const withinClawbackWindow = moisEcoules!==null && moisEcoules!==undefined && moisEcoules <= getRegles().clawbackMois;
+  const decommissionActivationAuto = isChute && withinClawbackWindow; // automatique, ne concerne QUE l'activation
+  const brutAnnule = !!decommissionManuel;                            // seule la Qualité peut annuler le brut
+  const activationAnnule = decommissionActivationAuto || !!decommissionManuel;
+  const needsQualityReview = isChute && withinClawbackWindow && !!wasBrutPaid && !decommissionManuel;
+  return { isChute, withinClawbackWindow, decommissionActivationAuto, brutAnnule, activationAnnule, needsQualityReview };
+}
+
+/* ============================= DÉDOUBLONNAGE AGENTS (similitude ≥80%) =============================
+   Les noms d'agent comportent des variations d'écriture (casse, espaces, fautes de frappe légères —
+   ex. « cécile koly » vs « Cécile Koly »). Dès qu'une similitude ≥80% (distance de Levenshtein
+   normalisée, casse et espaces superflus ignorés) est détectée entre deux noms rencontrés dans la
+   session, on les fusionne sous une seule identité canonique — celle utilisée le plus fréquemment —
+   afin d'éviter la dispersion des ventes/résultats d'un même agent dans l'interface. Réutilise
+   normalizeName()/levenshtein() déjà définis dans compare_expected.js (chargé sur la même page) pour
+   ne pas dupliquer cette logique. Le mapping choisi est mémorisé (localStorage) pour rester stable
+   d'un import à l'autre. */
+function harmoniseAgentNames(){
+  const SIMILARITY_THRESHOLD = 0.80;
+  if(typeof normalizeName !== 'function' || typeof levenshtein !== 'function'){
+    console.warn('harmoniseAgentNames: compare_expected.js non chargé, dédoublonnage ignoré.');
+    return [];
+  }
+  // Étape préalable : le moteur d'import fusionne déjà en interne (mergeStringField) les noms
+  // différents rencontrés pour un même contrat sous la forme composée « A / B ». Quand toutes les
+  // parties d'un tel composé désignent en réalité la même personne (simple variation de casse/espaces,
+  // ex. « MOUAD ELBRAHMI / Mouad ELBRAHMI »), on les recompose en une seule identité AVANT la
+  // comparaison par similarité globale — sinon le composé, trop différent de chaque partie prise
+  // isolément, ne serait jamais reconnu comme doublon.
+  const partCounts = {};
+  rawLignes.forEach(l=>{
+    (l.agent||'').split(' / ').map(s=>s.trim()).filter(Boolean).forEach(p=>{ partCounts[p] = (partCounts[p]||0)+1; });
+  });
+  rawLignes.forEach(l=>{
+    const parts = (l.agent||'').split(' / ').map(s=>s.trim()).filter(Boolean);
+    if(parts.length<2) return;
+    const normSet = new Set(parts.map(p=>normalizeName(p)));
+    if(normSet.size===1){
+      // toutes les parties sont identiques une fois normalisées → simple variation de casse/espaces :
+      // on retient la graphie la plus fréquente parmi elles.
+      const best = parts.slice().sort((a,b)=>(partCounts[b]||0)-(partCounts[a]||0))[0];
+      l.agent = best;
+    }
+  });
+
+  const counts = {};
+  rawLignes.forEach(l=>{ const n=(l.agent||'').trim(); if(n) counts[n]=(counts[n]||0)+1; });
+  const names = Object.keys(counts).sort((a,b)=>counts[b]-counts[a]); // du plus fréquent au moins fréquent
+  let stored = {};
+  try{ stored = JSON.parse(localStorage.getItem('sipp.agentCanonicalMap')||'{}'); }catch(e){ stored = {}; }
+
+  const canonicalFor = {};
+  const groups = [];
+  names.forEach(name=>{
+    if(canonicalFor[name]) return;
+    // un mapping déjà validé (manuellement ou lors d'un import précédent) prime sur la détection
+    const forced = stored[name];
+    const canonical = forced && names.includes(forced) ? forced : name;
+    canonicalFor[name] = canonical;
+    const group = { canonical, members:[name] };
+    names.forEach(other=>{
+      if(other===name || canonicalFor[other]) return;
+      const a = normalizeName(canonical), b = normalizeName(other);
+      if(!a || !b) return;
+      const dist = levenshtein(a,b);
+      const sim = 1 - dist/Math.max(a.length,b.length);
+      if(sim >= SIMILARITY_THRESHOLD){
+        group.members.push(other);
+        canonicalFor[other] = canonical;
+      }
+    });
+    groups.push(group);
+  });
+
+  let renamed = 0;
+  rawLignes.forEach(l=>{
+    const n = (l.agent||'').trim();
+    const c = n && canonicalFor[n];
+    if(c && c!==l.agent){ l.agent = c; renamed++; }
+  });
+
+  // mémorise le mapping pour la prochaine session/import
+  const toSave = Object.assign({}, stored);
+  Object.keys(canonicalFor).forEach(k=>{ if(canonicalFor[k]!==k) toSave[k] = canonicalFor[k]; });
+  try{ localStorage.setItem('sipp.agentCanonicalMap', JSON.stringify(toSave)); }catch(e){}
+
+  const merged = groups.filter(g=>g.members.length>1);
+  if(merged.length) appendDiagnostic('info', 'Dédoublonnage agents', merged.map(g=>`${g.canonical} ← [${g.members.filter(m=>m!==g.canonical).join(', ')}]`).join('\n'));
+  return merged;
+}
+
 function buildLignes(aSources, statusMap, hasCRM){
   rawLignes = [];
   const today = new Date();
@@ -2010,11 +2133,8 @@ function buildLignes(aSources, statusMap, hasCRM){
     const tempPerdue = introuvable && introuvableDecision==='attente';
     const etatN = norm(etatRaw);
     const isActivated = /activ/.test(etatN);
-    const isChute = /annul|resil|retract|refus/.test(etatN);
     const isPending = !found || /^introuvable|^en attente/.test(etatN);
     const moisEcoules = monthsBetween(item.dateVente, today);
-    const regles = getRegles();
-    const withinClawbackWindow = moisEcoules !== null && moisEcoules <= regles.clawbackMois;
     // Agenda des règles : le brut de 50 DH ne s'applique qu'aux ventes à partir de sa date
     // d'entrée en vigueur (01/07/2026 par défaut) — avant, aucune commission brute n'est due.
     const brut = brutEligible(item.dateVente) ? 50 : 0;
@@ -2024,10 +2144,8 @@ function buildLignes(aSources, statusMap, hasCRM){
     const decommissionManuel = !!manualOverride.decommissionManuel;
     const wasBrutPaid = manualOverride.statutPaiementBrut === 'Payé' || payeBrutPaid;
     const wasActivPaid = manualOverride.statutPaiementActivation === 'Payé';
-    const autoClawback = isChute && withinClawbackWindow && !wasBrutPaid && !wasActivPaid;
-    const needsQualityReview = isChute && (wasBrutPaid || wasActivPaid) && !decommissionManuel;
-    const decommissionne = autoClawback || decommissionManuel;
-    const net = (decommissionne || tempPerdue) ? 0 : (brut + activation);
+    const cb = computeMintClawback(etatRaw, moisEcoules, decommissionManuel, wasBrutPaid);
+    const net = tempPerdue ? 0 : ((cb.brutAnnule?0:brut) + (cb.activationAnnule?0:activation));
     const vendrediPaiement = nextFriday(item.dateVente);
 
     rawLignes.push({
@@ -2037,10 +2155,11 @@ function buildLignes(aSources, statusMap, hasCRM){
       statutCRM: etatRaw || '—',
       brut, activation, net,
       introuvable, introuvableDecision, tempPerdue,
-      decommissionAuto: autoClawback, decommissionManuel,
-      decommissionne, needsQualityReview,
-      // tempPerdue : paiement suspendu (« — ») tant que le manager n'a pas statué — sauf si déjà payé (acquis)
-      statutPaiementBrut: (brut===0 || (tempPerdue && !wasBrutPaid)) ? '—' : (manualOverride.statutPaiementBrut || (payeBrutPaid ? 'Payé' : 'Non Payé')),
+      decommissionAuto: cb.decommissionActivationAuto, decommissionManuel,
+      brutAnnule: cb.brutAnnule, decommissionne: cb.activationAnnule, needsQualityReview: cb.needsQualityReview,
+      // tempPerdue (Introuvable en attente) ou brut annulé par Qualité (refus qualité) sans avoir été
+      // payé auparavant → paiement suspendu/non payable (« — »). Sinon le brut reste toujours éditable.
+      statutPaiementBrut: (brut===0 || (tempPerdue && !wasBrutPaid) || (cb.brutAnnule && !wasBrutPaid)) ? '—' : (manualOverride.statutPaiementBrut || (payeBrutPaid ? 'Payé' : 'Non Payé')),
       statutPaiementActivation: (tempPerdue && !wasActivPaid) ? '—' : (manualOverride.statutPaiementActivation || 'Non Payé'),
       datePaiementBrut: manualOverride.datePaiementBrut || null,
       motifQualite: manualOverride.motifQualite || '',
@@ -2133,11 +2252,13 @@ function renderFinance(){
         id:l.id, Type:'MINT', Agent:l.agent, Date:l.dateVenteStr, Vendredi:l.vendrediPaiementStr,
         Contrat:l.contrat,
         Brut:l.brut,
-        Statut_Brut: l.decommissionne ? (wasBrutPaid ? 'Payé — annulé qualité' : '—') : l.statutPaiementBrut,
+        // Le brut n'est annulé QUE par un refus Qualité explicite (l.brutAnnule) — jamais par le
+        // clawback automatique de l'activation (l.decommissionne).
+        Statut_Brut: l.brutAnnule ? (wasBrutPaid ? 'Payé — annulé qualité' : '—') : l.statutPaiementBrut,
         Date_Paiement: l.datePaiementBrut || '',
         Avance: isAvance(l),
         Activation:l.activation,
-        Statut_Activation: l.activation===0 ? '—' : (l.decommissionne ? (l.statutPaiementActivation==='Payé' ? 'Payé — annulé qualité' : '—') : l.statutPaiementActivation),
+        Statut_Activation: l.activation===0 ? '—' : (l.decommissionne ? (l.statutPaiementActivation==='Payé' ? 'Payé — annulé (statut négatif)' : '—') : l.statutPaiementActivation),
         Decom_manuel:l.decommissionManuel,
         Revue_Qualite: l.needsQualityReview,
         Net:l.net
@@ -2240,7 +2361,7 @@ function renderFinance(){
           }
         }
       },
-      {title:"Décommissionné", field:"Decom_manuel", width:120, formatter:"tickCross", editor:"tickCross", editable:()=>canEditFinance(),
+      {title:"Refus Qualité (annule aussi le Brut)", field:"Decom_manuel", width:170, formatter:"tickCross", editor:"tickCross", editable:()=>canEditFinance(),
         cellEdited:cell=>{
           const r = cell.getRow().getData();
           setOverride(r.id, 'decommissionManuel', cell.getValue());
@@ -2300,13 +2421,15 @@ function renderDuParAgent(){
     if(!byAgent[l.agent]) byAgent[l.agent] = {Agent:l.agent, Brut_du:0, Retard:0, Activ_du:0, Conso_du:0};
     const a = byAgent[l.agent];
     if(l.type==='MINT'){
-      if(l.decommissionne || l.tempPerdue) return;
-      if(l.brut>0 && l.statutPaiementBrut!=='Payé'){
+      if(l.tempPerdue) return;
+      // Brut dû sauf refus Qualité explicite (l.brutAnnule) — le clawback auto de l'activation ne
+      // suspend jamais le brut.
+      if(!l.brutAnnule && l.brut>0 && l.statutPaiementBrut!=='Payé'){
         a.Brut_du += l.brut;
         const vp = toDateSafe(l.vendrediPaiement) || parseDate(l.vendrediPaiementStr||'');
         if(vp && vp.getTime() < todayMid.getTime()) a.Retard += l.brut;
       }
-      if(l.activation>0 && l.statutPaiementActivation!=='Payé') a.Activ_du += l.activation;
+      if(!l.decommissionne && l.activation>0 && l.statutPaiementActivation!=='Payé') a.Activ_du += l.activation;
     } else {
       // CONSO : seules les tranches exigibles (échues + conditions OK) non payées sont dues
       if(l.t1Due && l.statutPaiementT1!=='Payé') a.Conso_du += 50;
@@ -2410,8 +2533,12 @@ function recomputeAndRerender(){
     if(l.type!=='MINT') return;
     const o = overrides[l.id]||{};
     l.decommissionManuel = !!o.decommissionManuel;
+    // Refus Qualité (decommissionManuel) = la SEULE façon d'annuler le brut ; l'activation reste
+    // décommissionnée automatiquement dès chute (l.decommissionAuto), indépendamment du brut.
+    l.brutAnnule = l.decommissionManuel;
     l.decommissionne = l.decommissionAuto || l.decommissionManuel;
-    l.net = l.decommissionne ? 0 : (l.brut + l.activation);
+    if(l.brutAnnule && l.statutPaiementBrut!=='Payé') l.statutPaiementBrut = '—';
+    l.net = l.tempPerdue ? 0 : ((l.brutAnnule?0:l.brut) + (l.decommissionne?0:l.activation));
   });
   renderFinance();
   renderKPI();
@@ -2422,8 +2549,10 @@ function recomputeAndRerender(){
 
 function renderPayroll(){
   const byVendredi = {};
-  // seules les ventes avec un brut réellement dû (règle d'agenda + introuvables suspendues exclues)
-  filteredLignes().filter(l=>l.type==='MINT' && !l.decommissionne && !l.tempPerdue && l.brut>0).forEach(l=>{
+  // seules les ventes avec un brut réellement dû (règle d'agenda + introuvables suspendues exclues) —
+  // le clawback de l'activation (l.decommissionne) n'exclut PAS le brut, qui n'est jamais repris
+  // automatiquement (seul un refus Qualité explicite, l.brutAnnule, peut l'annuler).
+  filteredLignes().filter(l=>l.type==='MINT' && !l.brutAnnule && !l.tempPerdue && l.brut>0).forEach(l=>{
     const key = l.vendrediPaiementStr || '—';
     if(!byVendredi[key]) byVendredi[key] = {Vendredi:key, Contrats:0, Brut_a_payer:0, Brut_paye:0};
     byVendredi[key].Contrats++;
@@ -2473,24 +2602,29 @@ function renderFinanceSummary(){
 
   filteredLignes().forEach(l=>{
     if(l.type==='MINT'){
-      // créance : montants déjà versés sur des contrats annulés (décommissionnés ou en revue qualité)
-      if(l.decommissionne || l.needsQualityReview){
-        if(l.statutPaiementBrut==='Payé') recupDH += l.brut;
-        if(l.statutPaiementActivation==='Payé') recupDH += l.activation;
-      }
-      if(l.decommissionne){ decom += (l.brut+l.activation); return; }
+      // à récupérer : le brut n'y figure QUE si la Qualité a explicitement refusé (l.brutAnnule) un
+      // montant déjà versé ; l'activation y figure dès que le clawback auto (l.decommissionne) a
+      // frappé un montant déjà versé — jamais sur simple `needsQualityReview` (pas encore confirmé).
+      if(l.brutAnnule && l.statutPaiementBrut==='Payé') recupDH += l.brut;
+      if(l.decommissionne && l.statutPaiementActivation==='Payé') recupDH += l.activation;
+      decom += (l.brutAnnule?l.brut:0) + (l.decommissionne?l.activation:0);
       // introuvable en attente de décision manager : commissions suspendues, hors de tous les dûs
       if(l.tempPerdue){ introuvableDH += l.brut; introuvableN++; return; }
-      if(l.statutPaiementBrut==='Payé'){
-        brutPaye += l.brut;
-        if(isAvance(l)) avances += l.brut;
-      } else if(l.brut>0){
-        brutDu += l.brut;
-        if(l.vendrediPaiementStr===prochainVendredi) brutVendrediProchain += l.brut;
-        const vp = toDateSafe(l.vendrediPaiement) || parseDate(l.vendrediPaiementStr||'');
-        if(vp && vp.getTime() < todayMid.getTime()){ retardDH += l.brut; retardN++; }
+      // Brut : toujours dû sauf refus Qualité explicite (l.brutAnnule) — jamais suspendu par le
+      // clawback automatique de l'activation.
+      if(!l.brutAnnule){
+        if(l.statutPaiementBrut==='Payé'){
+          brutPaye += l.brut;
+          if(isAvance(l)) avances += l.brut;
+        } else if(l.brut>0){
+          brutDu += l.brut;
+          if(l.vendrediPaiementStr===prochainVendredi) brutVendrediProchain += l.brut;
+          const vp = toDateSafe(l.vendrediPaiement) || parseDate(l.vendrediPaiementStr||'');
+          if(vp && vp.getTime() < todayMid.getTime()){ retardDH += l.brut; retardN++; }
+        }
       }
-      if(l.activation>0){
+      // Activation : due seulement si non décommissionnée (clawback auto ou refus Qualité)
+      if(!l.decommissionne && l.activation>0){
         if(l.statutPaiementActivation==='Payé') activPaye += l.activation; else activDu += l.activation;
       }
     } else {
@@ -2542,21 +2676,23 @@ function renderKPI(){
     if(!byAgent[key]) byAgent[key] = {
       Agent:key, Ventes_MINT:0, Ventes_CONSO:0, Activees:0,
       Annulees:0, Retractees:0, Resiliees:0, Refusees:0, Chutes:0,
-      Decommissionnees:0, Net_Total:0
+      Decommissionnees:0, Brut_Total:0, Net_Total:0
     };
     if(l.type==='MINT'){
       byAgent[key].Ventes_MINT++;
       if(l.activation>0) byAgent[key].Activees++;
-      if(l.decommissionne) byAgent[key].Decommissionnees++;
+      if(l.decommissionne || l.brutAnnule) byAgent[key].Decommissionnees++; // activation clawback et/ou refus Qualité
       const motif = classifyChuteMotif(l.statutCRM);
       if(motif==='Annulée') byAgent[key].Annulees++;
       else if(motif==='Rétractée') byAgent[key].Retractees++;
       else if(motif==='Résiliée') byAgent[key].Resiliees++;
       else if(motif==='Refusée') byAgent[key].Refusees++;
       if(motif) byAgent[key].Chutes++;
+      byAgent[key].Brut_Total += l.brut; // brut « théorique » de la vente, avant décommissionnement
       byAgent[key].Net_Total += l.net;
     } else {
       byAgent[key].Ventes_CONSO++;
+      byAgent[key].Brut_Total += l.t1;
       byAgent[key].Net_Total += l.net;
     }
   });
@@ -2584,7 +2720,10 @@ function renderKPI(){
         formatter:c=>{ const n=parseInt(c.getValue()); return `<span class="tag ${n>=30?'bad':n>=15?'warn':'ok'}">${c.getValue()}</span>`; }},
       {title:"Taux Décommission (clawback)", field:"Taux_Decommission", hozAlign:"center",
         formatter:c=>`<span title="Part des ventes annulées avec récupération financière effective (fenêtre 3 mois, non payées)">${c.getValue()}</span>`},
-      {title:"Net généré (DH)", field:"Net_Total", hozAlign:"right", formatter:c=>`<b>${c.getValue()} DH</b>`}
+      {title:"Brut Total (DH)", field:"Brut_Total", hozAlign:"right",
+        formatter:c=>`<span title="Somme des commissions brutes générées, avant décommissionnement éventuel">${c.getValue()} DH</span>`},
+      {title:"Net généré (DH)", field:"Net_Total", hozAlign:"right",
+        formatter:c=>`<b title="Brut + Activation − Décommissionnement (montant réellement dû à l'agent)">${c.getValue()} DH</b>`}
     ]
   });
 }
@@ -2688,7 +2827,7 @@ function renderQualite(){
       {title:"Contrat", field:"Contrat", width:110},
       {title:"Client", field:"Client", widthGrow:2},
       {title:"Statut CRM", field:"Statut_CRM", widthGrow:1},
-      {title:"Décomm. auto (clawback <3 mois)", field:"Decommission_Auto", width:150, formatter:"tickCross"},
+      {title:"Activation décommissionnée (auto, <3 mois)", field:"Decommission_Auto", width:190, formatter:"tickCross"},
       {title:"⚠ Revue requise", field:"Revue_Necessaire", width:130,
         formatter:c=>c.getValue() ? '<span class="tag bad">Annulé CRM après paiement</span>' : ''},
       {title:"Annulation Qualité", field:"Annulation_Qualite", width:140, formatter:"tickCross",
@@ -2724,16 +2863,19 @@ function renderQualite(){
 }
 
 /* ============================= NÉGATIF FINANCIER (analyse des pertes) =============================
-   Vue d'analyse INDÉPENDANTE du moteur de paiement (clawback/tranches déjà en place) : elle applique
-   les 2 règles exactes demandées par la Direction, sans modifier net/decommissionne ailleurs dans
-   l'application — pour ne pas contredire les règles déjà validées (clawback 3 mois, tranches Conso). */
-const STATUTS_VIABLES_MINT = ['en attente','en attente de caution','active','activee']; // "Activé" normalisé
+   2026-07-16 — RÉVISION suite à la clarification Direction sur le commissionnement MINT (200 DH =
+   50 Brut + 150 Activation ; le Brut n'est JAMAIS perdu sauf refus Qualité explicite ; l'Activation
+   est décommissionnée automatiquement dès chute). La Règle A initiale ("perte = 100% du brut")
+   contredisait frontalement cette règle — elle est donc réalignée sur le moteur de paiement RÉEL
+   (computeMintClawback / l.brutAnnule / l.decommissionne) au lieu d'une formule indépendante : ce
+   tableau reflète désormais un vrai manque à gagner, identique à la Trésorerie, jamais un chiffre
+   théorique déconnecté. Le Brut n'apparaît en perte QUE si la Qualité l'a explicitement refusé.
+   Règle B (ConsoPilote) est inchangée (statut ∉ {Signé, Actif} → perte 50% de la commission attendue). */
 const STATUTS_VIABLES_CONSO = ['signe','actif','active'];
-// Règle A (MINT, brut) : statut ≠ (En attente / En attente de caution / Activé) → perte 100% du brut
+// Règle A (MINT) : perte = ce qui est réellement décommissionné par le moteur de paiement —
+// l'activation (150 DH) en cas de chute automatique, et/ou le brut (50 DH) en cas de refus Qualité.
 function isPerteA(l){
-  if(l.type!=='MINT' || l.brut<=0) return false;
-  const etat = norm(l.statutCRM);
-  return !STATUTS_VIABLES_MINT.some(s=>etat.includes(s));
+  return l.type==='MINT' && !!(l.decommissionne || l.brutAnnule);
 }
 // Règle B (ConsoPilote) : statut ≠ (Signé / Actif) → perte 50% de la commission attendue (100 DH)
 function isPerteB(l){
@@ -2742,19 +2884,22 @@ function isPerteB(l){
   return !STATUTS_VIABLES_CONSO.some(s=>etat.includes(s));
 }
 function perteMontant(l){
-  if(l.type==='MINT') return isPerteA(l) ? l.brut : 0;      // 100% de la commission brute
+  if(l.type==='MINT') return (l.brutAnnule?l.brut:0) + (l.decommissionne?l.activation:0);
   if(l.type==='CONSO') return isPerteB(l) ? 50 : 0;         // 50% de la commission attendue (100 DH)
   return 0;
 }
 
 function renderNegatifFinancier(){
   const L = filteredLignes();
-  const rows = L.filter(l => isPerteA(l) || isPerteB(l));
+  // Ne liste que les pertes réellement chiffrées : une vente MINT chutée mais jamais activée
+  // (l.activation===0) n'a rien à perdre côté activation et le brut reste dû tant que la Qualité ne
+  // l'a pas explicitement refusé — elle n'a donc pas sa place dans une analyse des pertes financières.
+  const rows = L.filter(l => (isPerteA(l) || isPerteB(l)) && perteMontant(l) > 0);
   const totalPerteMint = rows.filter(l=>l.type==='MINT').reduce((s,l)=>s+perteMontant(l),0);
   const totalPerteConso = rows.filter(l=>l.type==='CONSO').reduce((s,l)=>s+perteMontant(l),0);
 
   document.getElementById('negatif-summary').innerHTML = `
-    <div class="stat-card red"><div class="label">Pertes Règle A (MINT — 100% brut)</div><div class="value">${totalPerteMint} DH</div></div>
+    <div class="stat-card red"><div class="label">Pertes Règle A (MINT — activation/brut décommissionnés)</div><div class="value">${totalPerteMint} DH</div></div>
     <div class="stat-card red"><div class="label">Pertes Règle B (ConsoPilote — 50%)</div><div class="value">${totalPerteConso} DH</div></div>
     <div class="stat-card red"><div class="label">Total pertes</div><div class="value">${totalPerteMint+totalPerteConso} DH</div></div>
     <div class="stat-card amber"><div class="label">Contrats concernés</div><div class="value">${rows.length}</div></div>
@@ -2822,8 +2967,12 @@ function renderBordereau(){
     const a = byAgent[l.agent];
     a._totalVentes++;
     if(l.type==='MINT'){
+      // Le brut (l.brutAnnule) et l'activation (l.decommissionne) peuvent être perdus indépendamment
+      // l'un de l'autre — Remun_Mint ne compte donc que la part réellement acquise, même en cas de
+      // perte partielle (ex. activation décommissionnée mais brut toujours dû).
       if(isPerteA(l)){ a.Nb_Mint_Decom++; a.Perte_DH += perteMontant(l); a._negatives++; }
-      else { a.Nb_Mint_Payables++; a.Remun_Mint += (l.brut + l.activation); }
+      else a.Nb_Mint_Payables++;
+      a.Remun_Mint += (l.brutAnnule?0:l.brut) + (l.decommissionne?0:l.activation);
     } else {
       if(isPerteB(l)){ a.Nb_Conso_Negatif++; a.Perte_DH += perteMontant(l); a._negatives++; }
       else { a.Nb_Conso_Payables++; a.Remun_Conso += l.net; }
@@ -2944,9 +3093,9 @@ function renderMesVentes(){
   let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0;
   mine.forEach(l=>{
     if(l.type==='MINT'){
-      if(l.decommissionne){ decom += (l.brut+l.activation); return; }
-      if(l.statutPaiementBrut==='Payé') brutPaye+=l.brut; else brutDu+=l.brut;
-      if(l.activation>0){ if(l.statutPaiementActivation==='Payé') activPaye+=l.activation; else activDu+=l.activation; }
+      decom += (l.brutAnnule?l.brut:0) + (l.decommissionne?l.activation:0);
+      if(!l.brutAnnule){ if(l.statutPaiementBrut==='Payé') brutPaye+=l.brut; else brutDu+=l.brut; }
+      if(!l.decommissionne && l.activation>0){ if(l.statutPaiementActivation==='Payé') activPaye+=l.activation; else activDu+=l.activation; }
     } else {
       [[l.statutPaiementT1, l.t1Due], [l.statutPaiementT2, l.t2Due]].forEach(([st, due])=>{
         if(st==='Payé') consoPaye += 50; else if(due) consoDu += 50;
@@ -2962,12 +3111,12 @@ function renderMesVentes(){
 
   const detailData = mine.map(l=> l.type==='MINT' ? {
     Type:'MINT', Date:l.dateVenteStr, Contrat:l.contrat, Statut_CRM:l.statutCRM,
-    Brut:l.brut, Statut_Brut:l.decommissionne?'—':l.statutPaiementBrut,
+    Brut:l.brut, Statut_Brut:l.brutAnnule?'—':l.statutPaiementBrut,
     Activation:l.activation, Statut_Activation:(l.activation===0||l.decommissionne)?'—':l.statutPaiementActivation,
-    Decommissionne:l.decommissionne?'OUI':'NON'
+    Decommissionne:(l.brutAnnule||l.decommissionne)?'OUI':'NON', Net:l.net
   } : {
     Type:'CONSO', Date:l.dateVenteStr, Contrat:l.contrat, Statut_CRM:l.statutCRM,
-    Brut:l.t1, Statut_Brut:consoTrancheDisplay(l,1), Activation:l.t2, Statut_Activation:consoTrancheDisplay(l,2), Decommissionne:l.t2Perdue?'T2 perdue':'NON'
+    Brut:l.t1, Statut_Brut:consoTrancheDisplay(l,1), Activation:l.t2, Statut_Activation:consoTrancheDisplay(l,2), Decommissionne:l.t2Perdue?'T2 perdue':'NON', Net:l.net
   });
   if(tMesVentes) tMesVentes.destroy();
   tMesVentes = new Tabulator("#table-mesventes", {
@@ -2993,13 +3142,15 @@ function renderMesVentes(){
         if(v==='Non Payé') return '<span class="tag bad">Non Payé</span>';
         return `<span style="color:var(--ink-dim)">${v}</span>`;
       }},
-      {title:"Décommissionné", field:"Decommissionne", width:120}
+      {title:"Décommissionné", field:"Decommissionne", width:120},
+      {title:"Net (DH)", field:"Net", width:100, hozAlign:"right",
+        formatter:c=>`<b style="color:${c.getValue()>0?'#3fd6a4':'#8ea0bd'}">${c.getValue()} DH</b>`}
     ]
   });
 
-  // par vendredi
+  // par vendredi — le brut reste dû tant qu'il n'y a pas eu de refus Qualité (l.brutAnnule)
   const byWeek = {};
-  mine.filter(l=>l.type==='MINT' && !l.decommissionne).forEach(l=>{
+  mine.filter(l=>l.type==='MINT' && !l.brutAnnule).forEach(l=>{
     const k = l.vendrediPaiementStr;
     if(!byWeek[k]) byWeek[k] = {Vendredi:k, Du:0, Paye:0};
     if(l.statutPaiementBrut==='Payé') byWeek[k].Paye += l.brut; else byWeek[k].Du += l.brut;
@@ -3027,9 +3178,11 @@ function renderMesVentes(){
     const k = ref.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
     if(!byMonth[k]) byMonth[k] = {Mois:k, Net:0, Paye:0, Du:0, _sort:new Date(ref.getFullYear(),ref.getMonth(),1)};
     if(l.type==='MINT'){
-      if(l.decommissionne) return;
       byMonth[k].Net += l.net;
-      const paye = (l.statutPaiementBrut==='Payé'?l.brut:0) + (l.statutPaiementActivation==='Payé'?l.activation:0);
+      // brut compté sauf refus Qualité (l.brutAnnule) ; activation seulement si non décommissionnée
+      const brutPaye = (!l.brutAnnule && l.statutPaiementBrut==='Payé') ? l.brut : 0;
+      const activPaye = (!l.decommissionne && l.statutPaiementActivation==='Payé') ? l.activation : 0;
+      const paye = brutPaye + activPaye;
       byMonth[k].Paye += paye; byMonth[k].Du += (l.net-paye);
     } else {
       byMonth[k].Net += l.net;
@@ -3075,12 +3228,13 @@ function buildCalendarStats(){
   const byDay = {}; // key "DD/MM/YYYY" -> {brutDu, brutPaye, decomCount, byAgent:{}}
   filteredLignes().forEach(l=>{
     if(l.type!=='MINT' || !l.vendrediPaiement) return;
-    if(l.brut===0 && !l.decommissionne) return; // règle d'agenda : pas de brut dû avant l'entrée en vigueur
     if(l.tempPerdue) return; // introuvable en attente de décision : suspendue, hors calendrier
     const key = l.vendrediPaiementStr;
     if(!byDay[key]) byDay[key] = {brutDu:0, brutPaye:0, decomCount:0, byAgent:{}};
     const day = byDay[key];
-    if(l.decommissionne){ day.decomCount++; return; }
+    // badge décommission : refus Qualité du brut et/ou clawback auto de l'activation
+    if(l.brutAnnule || l.decommissionne) day.decomCount++;
+    if(l.brutAnnule || l.brut===0) return; // le brut n'est jamais dû (refus Qualité ou avant l'agenda)
     if(!day.byAgent[l.agent]) day.byAgent[l.agent] = {du:0, paye:0};
     if(l.statutPaiementBrut==='Payé'){ day.brutPaye += l.brut; day.byAgent[l.agent].paye += l.brut; }
     else { day.brutDu += l.brut; day.byAgent[l.agent].du += l.brut; }
@@ -3174,7 +3328,7 @@ function bulkSetFriday(dateStr, value){
   if(!canEditFinance()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
   let locked = 0;
   rawLignes.forEach(l=>{
-    if(l.type==='MINT' && l.vendrediPaiementStr===dateStr && !l.decommissionne){
+    if(l.type==='MINT' && l.vendrediPaiementStr===dateStr && !l.brutAnnule){
       // règle d'agenda : pas de brut dû (vente antérieure à l'entrée en vigueur) → rien à marquer
       if(l.brut===0) return;
       // Même règle métier que la colonne Statut Brut de l'onglet Trésorerie : un contrat déjà
@@ -3222,10 +3376,10 @@ document.getElementById('exportFinanceBtn').addEventListener('click', ()=>{
   if(!rawLignes.length){ showError('Rien à exporter — importez d\'abord un fichier.'); return; }
   const rows = rawLignes.map(l=> l.type==='MINT' ? {
     Type:'MINT', Agent:l.agent, Date_Vente:l.dateVenteStr, Vendredi_Paie:l.vendrediPaiementStr, Contrat:l.contrat,
-    Statut_CRM:l.statutCRM, Brut:l.brut, Statut_Brut:l.decommissionne?'—':l.statutPaiementBrut,
-    Date_Paiement_Brut: l.decommissionne?'':(l.datePaiementBrut||''), Avance: isAvance(l)?'OUI':'NON',
+    Statut_CRM:l.statutCRM, Brut:l.brut, Statut_Brut:l.brutAnnule?'—':l.statutPaiementBrut,
+    Date_Paiement_Brut: l.brutAnnule?'':(l.datePaiementBrut||''), Avance: isAvance(l)?'OUI':'NON',
     Activation:l.activation, Statut_Activation:(l.activation===0||l.decommissionne)?'—':l.statutPaiementActivation,
-    Decommissionne: l.decommissionne?'OUI':'NON', Net:l.net
+    Decommissionne: (l.brutAnnule||l.decommissionne)?'OUI':'NON', Net:l.net
   } : {
     Type:'CONSO', Agent:l.agent, Date_Vente:l.dateVenteStr, Vendredi_Paie:'', Contrat:l.contrat,
     Statut_CRM:l.statutCRM, Prelevement:l.prelevement,
