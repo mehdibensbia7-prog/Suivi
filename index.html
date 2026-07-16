@@ -285,6 +285,7 @@
   <button class="navbtn" data-tab="qualite">Suivi Qualité</button>
   <button class="navbtn" data-tab="negatif">Négatif Financier</button>
   <button class="navbtn" data-tab="bordereau">Bordereau Mensuel</button>
+  <button class="navbtn" data-tab="caisse">Caisse</button>
   <button class="navbtn" data-tab="mesventes">Mes Ventes</button>
 </div>
 
@@ -293,7 +294,7 @@
 
   <div class="tab active" id="tab-suivi">
     <div class="panel">
-      <h2>Ventes brutes détectées <span class="sub">— table agents (Google Form) rapprochée avec l'export CRM (statuts)</span></h2>
+      <h2>Ventes brutes détectées <span class="sub">— table agents (Google Form) rapprochée avec l'export CRM (statuts)</span> <button class="btn" id="exportSuiviBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div id="table-suivi" class="table-scroll"></div>
       <div class="legend">Un contrat MINT est reconnu par toute séquence de <b>5 à 7 chiffres</b> trouvée dans la colonne « Numéro Contrat Energie » — séparateurs acceptés : espace, <code>/</code>, <code>-</code>, <code>//</code>, <code>_</code>. Chaque séquence = 1 vente MINT distincte. La colonne « Numéro Contrat ConsoPilote » (si non vide, non nulle, non « * ») déclenche une vente ConsoPilote.</div>
     </div>
@@ -306,7 +307,7 @@
       <div id="reglesContent" class="legend" style="margin-top:0"></div>
     </div>
     <div class="panel">
-      <h2>Échéancier de paie — Brut MINT <span class="sub">chaque vendredi qui suit la date de vente ; cliquez le vendredi dans le filtre ci-dessous pour isoler les lignes à régler — les lignes rouges sont en retard</span></h2>
+      <h2>Échéancier de paie — Brut MINT <span class="sub">chaque vendredi qui suit la date de vente ; cliquez le vendredi dans le filtre ci-dessous pour isoler les lignes à régler — les lignes rouges sont en retard</span> <button class="btn" id="exportPayrollBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div id="table-payroll" class="table-scroll"></div>
     </div>
     <div class="panel">
@@ -334,7 +335,7 @@
 
   <div class="tab" id="tab-kpi">
     <div class="panel">
-      <h2>Performance par agent</h2>
+      <h2>Performance par agent <button class="btn" id="exportKpiBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div id="table-kpi" class="table-scroll"></div>
     </div>
   </div>
@@ -360,7 +361,7 @@
       </div>
     </div>
     <div class="panel" id="calDetailPanel" style="display:none;">
-      <h2 id="calDetailTitle">Détail du vendredi</h2>
+      <h2 id="calDetailTitle">Détail du vendredi <button class="btn" id="exportCalDetailBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div class="filters">
         <button class="btn primary" id="calMarkAllPaid">Marquer tout « Payé » pour ce vendredi</button>
         <button class="btn warn" id="calMarkAllUnpaid">Réinitialiser « Non Payé »</button>
@@ -371,14 +372,14 @@
 
   <div class="tab" id="tab-alertes">
     <div class="panel">
-      <h2>Contrats à surveiller <span class="sub">— non trouvés dans l'export CRM, en attente, ou proches de l'échéance clawback (3 mois)</span></h2>
+      <h2>Contrats à surveiller <span class="sub">— non trouvés dans l'export CRM, en attente, ou proches de l'échéance clawback (3 mois)</span> <button class="btn" id="exportAlertesBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div id="table-alertes" class="table-scroll"></div>
     </div>
   </div>
 
   <div class="tab" id="tab-qualite">
     <div class="panel">
-      <h2>Suivi Qualité <span class="sub">— aucune donnée financière affichée. Droit de statuer sur une annulation de contrat pour raison qualité uniquement.</span></h2>
+      <h2>Suivi Qualité <span class="sub">— aucune donnée financière affichée. Droit de statuer sur une annulation de contrat pour raison qualité uniquement.</span> <button class="btn" id="exportQualiteBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div class="filters">
         <select id="qualiteFilterAgent"><option value="">Tous les agents</option></select>
         <select id="qualiteFilterStatut"><option value="">Tous statuts</option><option value="actif">Actif / en cours</option><option value="annule_qualite">Annulé (qualité)</option><option value="revue">⚠ Revue requise</option></select>
@@ -390,7 +391,7 @@
   <div class="tab" id="tab-negatif">
     <div class="summary-grid" id="negatif-summary"></div>
     <div class="panel">
-      <h2>Analyse des pertes <span class="sub">— Règle A (MINT) : perte = montant réellement décommissionné (Activation 150 DH en cas de chute automatique et/ou Brut 50 DH en cas de refus Qualité explicite — le Brut n'est jamais perdu automatiquement). Règle B (ConsoPilote) : statut ≠ Signé / Actif → perte 50% de la commission attendue.</span></h2>
+      <h2>Analyse des pertes <span class="sub">— Règle A (MINT) : perte = montant réellement décommissionné (Activation 150 DH en cas de chute automatique et/ou Brut 50 DH en cas de refus Qualité explicite — le Brut n'est jamais perdu automatiquement). Règle B (ConsoPilote) : statut ≠ Signé / Actif → perte 50% de la commission attendue.</span> <button class="btn" id="exportNegatifBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div class="filters">
         <select id="negatifFilterMarque"><option value="">MINT + ConsoPilote</option><option value="MINT">MINT seul (Règle A)</option><option value="CONSO">ConsoPilote seul (Règle B)</option></select>
         <select id="negatifFilterAgent"><option value="">Tous les agents</option></select>
@@ -404,7 +405,7 @@
       📅 Période de facturation active (Bordereau mensuel) — consolidation du 1er au 5 du mois.
     </div>
     <div class="panel">
-      <h2>Bordereau mensuel par agent <span class="sub" id="bordereauPeriodLabel">— sur la période sélectionnée ci-dessus</span></h2>
+      <h2>Bordereau mensuel par agent <span class="sub" id="bordereauPeriodLabel">— sur la période sélectionnée ci-dessus</span> <button class="btn" id="exportBordereauBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div class="filters" style="align-items:center;">
         <label style="font-size:12px;color:var(--ink-dim);display:flex;align-items:center;gap:6px;">Seuil taux d'échec (%)
           <input type="number" id="seuilEchec" min="1" max="100" value="15" style="width:60px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-family:var(--mono);">
@@ -416,13 +417,53 @@
     </div>
   </div>
 
+  <div class="tab" id="tab-caisse">
+    <div class="summary-grid" id="caisse-summary"></div>
+    <div class="panel">
+      <h2>Mouvements de caisse <span class="sub">— entrées manuelles (fonds injectés) et sorties automatiques (Brut MINT payé) ; registre indépendant de la session d'import active</span></h2>
+      <div class="filters" id="caisseInjectionForm" style="align-items:center">
+        <input type="number" id="caisseInjectMontant" placeholder="Montant (DH)" style="width:140px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:9px 12px;font-family:var(--mono);">
+        <input type="text" id="caisseInjectMotif" placeholder="Motif (ex. dotation mensuelle)" style="flex:1;min-width:200px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:9px 12px;">
+        <button class="btn primary" id="caisseInjectBtn">Ajouter des fonds</button>
+      </div>
+      <div id="table-caisse-mouvements" class="table-scroll"></div>
+    </div>
+    <div class="panel">
+      <h2>Avances par agent <span class="sub">— attribuables sur la base de ventes Mint 50 DH non encore payées, ou pour tout autre motif ; ajustables à tout moment</span></h2>
+      <div class="filters" id="caisseAvanceForm" style="align-items:center">
+        <select id="caisseAvanceAgent" style="min-width:220px"><option value="">Sélectionner un agent…</option></select>
+        <input type="number" id="caisseAvanceMontant" placeholder="Montant avance (DH)" style="width:170px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:9px 12px;font-family:var(--mono);">
+        <input type="text" id="caisseAvanceMotif" placeholder="Motif" style="flex:1;min-width:200px;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:9px 12px;">
+        <button class="btn primary" id="caisseAvanceBtn">Attribuer / mettre à jour l'avance</button>
+      </div>
+      <div id="table-caisse-avances" class="table-scroll"></div>
+    </div>
+    <div class="panel">
+      <h2>Import du fichier « Avance » <span class="sub">— rapprochement des prénoms courts avec les agents de la base harmonisée ; confirmation obligatoire avant application (aucune attribution automatique)</span> <button class="btn" id="exportCaisseAgentsBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
+      <div class="filters">
+        <label class="btn file-btn" style="background:var(--panel);border:1px solid var(--line);">Importer Avance.xlsx<input type="file" id="avanceFileInput" accept=".xlsx,.xls" style="display:none"></label>
+      </div>
+      <div id="avanceImportReview" style="display:none;margin-top:10px">
+        <div id="avanceImportList" style="max-height:40vh;overflow:auto"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+          <button class="btn" id="avanceImportCancel">Annuler</button>
+          <button class="btn primary" id="avanceImportApply">Appliquer les avances confirmées</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Récapitulatif par agent <span class="sub">— avances reçues, brut Mint généré (session en cours), reste à payer</span></h2>
+      <div id="table-caisse-agents" class="table-scroll"></div>
+    </div>
+  </div>
+
   <div class="tab" id="tab-mesventes">
     <div class="panel">
       <h2>Mes ventes <span id="mesVentesAgentLabel" class="sub"></span></h2>
       <div class="summary-grid" id="mesventes-summary"></div>
     </div>
     <div class="panel">
-      <h2>Détail de mes contrats</h2>
+      <h2>Détail de mes contrats <button class="btn" id="exportMesVentesBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div id="table-mesventes" class="table-scroll"></div>
     </div>
     <div class="panel">
@@ -611,13 +652,16 @@ const ROLE_LABELS = {
   superadmin:'Super Admin', directeur:'Directeur', associes:'Associés', qualite:'Qualité', agent:'Agent'
 };
 const PERM = {
-  superadmin: {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:true},
-  directeur:  {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:false},
-  associes:   {tabs:['finance','calendrier'],                                   editFinance:false, editQuality:false, manageState:false, defaultTab:'finance', superUser:false},
-  qualite:    {tabs:['qualite','alertes'],                                      editFinance:false, editQuality:true,  manageState:true,  defaultTab:'qualite', superUser:false},
-  agent:      {tabs:['mesventes'],                                              editFinance:false, editQuality:false, manageState:false, defaultTab:'mesventes', superUser:false}
+  // caisseAdmin : Spécification 2.1 — Super Admin ET Directeur UNIQUEMENT peuvent accéder à la Caisse,
+  // ajuster le solde, attribuer/modifier des avances. Aucun autre rôle (y compris Qualité) n'y a accès.
+  superadmin: {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau','caisse'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:true,  caisseAdmin:true},
+  directeur:  {tabs:['suivi','finance','calendrier','kpi','alertes','qualite','negatif','bordereau','caisse'], editFinance:true,  editQuality:true,  manageState:true,  defaultTab:'suivi', superUser:false, caisseAdmin:true},
+  associes:   {tabs:['finance','calendrier'],                                   editFinance:false, editQuality:false, manageState:false, defaultTab:'finance', superUser:false, caisseAdmin:false},
+  qualite:    {tabs:['qualite','alertes'],                                      editFinance:false, editQuality:true,  manageState:true,  defaultTab:'qualite', superUser:false, caisseAdmin:false},
+  agent:      {tabs:['mesventes'],                                              editFinance:false, editQuality:false, manageState:false, defaultTab:'mesventes', superUser:false, caisseAdmin:false}
 };
 function isSuperUser(){ return currentRole && !!PERM[currentRole].superUser; }
+function canEditCaisse(){ return currentRole && !!PERM[currentRole].caisseAdmin; }
 let currentRole = null;
 let currentAgentName = null;
 function canEditFinance(){ return currentRole && PERM[currentRole].editFinance; }
@@ -816,6 +860,7 @@ document.querySelectorAll('.navbtn').forEach(b=>{
     if(b.dataset.tab==='mesventes' && rawLignes.length) renderMesVentes();
     if(b.dataset.tab==='negatif' && rawLignes.length) renderNegatifFinancier();
     if(b.dataset.tab==='bordereau' && rawLignes.length) renderBordereau();
+    if(b.dataset.tab==='caisse') renderCaisse();
   });
 });
 function setStatus(msg, kind, badge){
@@ -1402,6 +1447,31 @@ function periodLabel(){
 }
 // résumé compact utilisé par les nouveaux onglets (Négatif Financier / Bordereau)
 function periodBadgeText(){ const l = periodLabel(); return l ? `Période : ${l}` : 'Toute la période'; }
+
+/* ============================= EXPORT XLSX GÉNÉRIQUE (tous les onglets) =============================
+   Réutilise le téléchargeur natif de Tabulator (déjà chargé) qui s'appuie lui-même sur SheetJS/XLSX
+   déjà présent sur la page — aucune dépendance supplémentaire. rowRange:"active" exporte exactement
+   les lignes actuellement visibles après filtres (agent/type/statut) ET après le bornage temporel
+   universel, puisque celui-ci est déjà appliqué en amont via filteredLignes(). */
+function exportTable(table, baseName){
+  if(!table){ showError('Rien à exporter — importez d\'abord un fichier.'); return; }
+  const data = table.getData('active');
+  if(!data.length){ showError('Aucune ligne à exporter sur la vue actuelle.'); return; }
+  const filename = `${baseName}_${new Date().toISOString().slice(0,10)}.xlsx`;
+  table.download('xlsx', filename, {sheetName:'Export'}, 'active');
+  setStatus(`Export « ${filename} » — ${data.length} ligne(s).`, 'ok');
+}
+// câblage des boutons d'export par onglet — chaque bouton exporte le tableau principal de son
+// panneau, tel qu'affiché à l'écran (filtres actifs + bornage temporel universel inclus)
+document.getElementById('exportSuiviBtn').addEventListener('click', ()=> exportTable(tSuivi, 'sipp_suivi'));
+document.getElementById('exportPayrollBtn').addEventListener('click', ()=> exportTable(window.tPayroll, 'sipp_echeancier_paie'));
+document.getElementById('exportKpiBtn').addEventListener('click', ()=> exportTable(tKPI, 'sipp_kpi_agents'));
+document.getElementById('exportAlertesBtn').addEventListener('click', ()=> exportTable(tAlertes, 'sipp_alertes'));
+document.getElementById('exportQualiteBtn').addEventListener('click', ()=> exportTable(tQualite, 'sipp_qualite'));
+document.getElementById('exportNegatifBtn').addEventListener('click', ()=> exportTable(window.tNegatif, 'sipp_negatif_financier'));
+document.getElementById('exportBordereauBtn').addEventListener('click', ()=> exportTable(window.tBordereau, 'sipp_bordereau_mensuel'));
+document.getElementById('exportMesVentesBtn').addEventListener('click', ()=> exportTable(tMesVentes, 'sipp_mes_ventes'));
+document.getElementById('exportCalDetailBtn').addEventListener('click', ()=> exportTable(window.tCalDetail, 'sipp_calendrier_detail'));
 function periodMatch(l){
   const b = periodBounds();
   if(!b) return true;
@@ -1578,12 +1648,16 @@ function applyReglesToLignes(){
 function openSippDB(){
   return new Promise((resolve,reject)=>{
     if(sippDB) return resolve(sippDB);
-    const req = indexedDB.open('sipp-db', 1);
+    // v2 : ajoute le store 'caisse' (registre financier global, indépendant des sessions d'import —
+    // Spécification 2/3/4). Le bump de version déclenche onupgradeneeded même pour les bases déjà
+    // créées en v1 lors de sessions précédentes.
+    const req = indexedDB.open('sipp-db', 2);
     req.onupgradeneeded = ev => {
       const db = ev.target.result;
       if(!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions',{keyPath:'id'});
       if(!db.objectStoreNames.contains('lignes')) db.createObjectStore('lignes',{keyPath:'key'});
       if(!db.objectStoreNames.contains('audit')) db.createObjectStore('audit',{autoIncrement:true});
+      if(!db.objectStoreNames.contains('caisse')) db.createObjectStore('caisse',{keyPath:'id'});
     };
     req.onsuccess = ev => { sippDB = ev.target.result; resolve(sippDB); };
     req.onerror = ev => reject(ev.target.error);
@@ -1629,6 +1703,282 @@ function getSessionMeta(id){
     req.onerror = ()=> reject(req.error);
   });
 }
+
+/* ============================= CAISSE — registre financier global (Spécifications 2/3/4) =============================
+   Contrairement aux `rawLignes` (propres à la session d'import affichée), la Caisse est un registre
+   CUMULATIF indépendant de la session actuellement chargée — une caisse réelle ne se réinitialise pas
+   parce qu'on réimporte un nouveau fichier de ventes. Stocké dans le store IndexedDB dédié `caisse`
+   (un seul enregistrement, id fixe 'main'), jamais dans `overrides`/`rawLignes`. */
+const CAISSE_ID = 'main';
+function defaultCaisseState(){
+  return { id:CAISSE_ID, soldeInitial:0, injections:[], mintDebits:[], avances:{}, avanceHistorique:[] };
+}
+async function loadCaisseState(){
+  await openSippDB();
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['caisse'],'readonly');
+    const req = tx.objectStore('caisse').get(CAISSE_ID);
+    req.onsuccess = ()=> resolve(req.result || defaultCaisseState());
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function saveCaisseState(state){
+  await openSippDB();
+  return new Promise((resolve,reject)=>{
+    const tx = sippDB.transaction(['caisse'],'readwrite');
+    tx.objectStore('caisse').put(state);
+    tx.oncomplete = ()=> resolve(true);
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+// Sortie automatique (Spéc 2.2) : dès qu'une vente MINT Brut passe « Payé », 50 DH sont débités de
+// la caisse pour régler la commission — idempotent (une seule fois par ligne, même si le tableau se
+// re-rend plusieurs fois) via une vérification sur l'id de ligne déjà enregistré.
+async function debitCaisseMint(line){
+  if(!line || line.type!=='MINT' || line.brut<=0) return;
+  const state = await loadCaisseState();
+  if(state.mintDebits.some(m=>m.lineId===line.id)) return; // déjà débité, ne pas dupliquer
+  state.mintDebits.push({ lineId:line.id, contrat:line.contrat, agent:line.agent, montant:line.brut, date:new Date().toISOString() });
+  await saveCaisseState(state);
+  if(document.getElementById('tab-caisse') && document.getElementById('tab-caisse').classList.contains('active')) renderCaisse();
+}
+function caisseSolde(state){
+  const injections = state.injections.reduce((s,i)=>s+i.montant,0);
+  const debitsMint = state.mintDebits.reduce((s,d)=>s+d.montant,0);
+  const avances = Object.values(state.avances).reduce((s,v)=>s+v,0);
+  return state.soldeInitial + injections - debitsMint - avances;
+}
+// rattrapage : couvre tout passage à « Payé » qui n'aurait pas transité par un des deux hooks
+// ci-dessus (ex. réimport d'un état JSON) — scanne la session actuellement chargée.
+async function reconcileCaisseDebits(state){
+  let changed = false;
+  rawLignes.forEach(l=>{
+    if(l.type==='MINT' && l.brut>0 && l.statutPaiementBrut==='Payé' && !state.mintDebits.some(m=>m.lineId===l.id)){
+      state.mintDebits.push({ lineId:l.id, contrat:l.contrat, agent:l.agent, montant:l.brut, date:new Date().toISOString() });
+      changed = true;
+    }
+  });
+  if(changed) await saveCaisseState(state);
+  return state;
+}
+
+async function renderCaisse(){
+  const box = document.getElementById('caisse-summary');
+  if(!canEditCaisse()){
+    box.innerHTML = `<div class="empty" style="grid-column:1/-1">Accès réservé aux profils Super Admin et Directeur.</div>`;
+    ['table-caisse-mouvements','table-caisse-avances','table-caisse-agents'].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML=''; });
+    document.getElementById('caisseInjectionForm').style.display = 'none';
+    document.getElementById('caisseAvanceForm').style.display = 'none';
+    return;
+  }
+  document.getElementById('caisseInjectionForm').style.display = '';
+  document.getElementById('caisseAvanceForm').style.display = '';
+
+  let state = await loadCaisseState();
+  state = await reconcileCaisseDebits(state);
+  const solde = caisseSolde(state);
+  const totalAvances = Object.values(state.avances).reduce((s,v)=>s+v,0);
+  const totalDebitsMint = state.mintDebits.reduce((s,d)=>s+d.montant,0);
+
+  box.innerHTML = `
+    <div class="stat-card ${solde>=0?'mint':'red'}"><div class="label">Solde disponible en Caisse</div><div class="value">${solde} DH</div></div>
+    <div class="stat-card amber"><div class="label">Total avances attribuées</div><div class="value">${totalAvances} DH</div></div>
+    <div class="stat-card blue"><div class="label">Total Brut MINT payé (sorties auto)</div><div class="value">${totalDebitsMint} DH</div></div>
+  `;
+
+  // ---- Mouvements (injections + débits auto) ----
+  const mouvements = [
+    ...state.injections.map(i=>({Date:fmtDate(new Date(i.date)), Type:'Entrée (fonds)', Detail:i.motif||'—', Agent:'—', Montant:i.montant})),
+    ...state.mintDebits.map(d=>({Date:fmtDate(new Date(d.date)), Type:'Sortie auto (Brut MINT payé)', Detail:'Contrat '+d.contrat, Agent:d.agent, Montant:-d.montant})),
+    ...Object.entries(state.avances).filter(([,v])=>v>0).map(([agent,v])=>({Date:'—', Type:'Sortie (avance active)', Detail:'Solde d\'avance en cours', Agent:agent, Montant:-v}))
+  ].sort((a,b)=> (b.Date==='—'?0:new Date(b.Date.split('/').reverse().join('-'))) - (a.Date==='—'?0:new Date(a.Date.split('/').reverse().join('-'))));
+  if(window.tCaisseMouv) window.tCaisseMouv.destroy();
+  window.tCaisseMouv = new Tabulator('#table-caisse-mouvements', {
+    data:mouvements, layout:'fitDataStretch', height: mouvements.length?Math.min(80+mouvements.length*36,380)+'px':'80px',
+    placeholder:'Aucun mouvement — ajoutez des fonds ci-dessus.',
+    columns:[
+      {title:'Date', field:'Date', width:110},
+      {title:'Type', field:'Type', widthGrow:1, formatter:c=>{
+        const v=c.getValue();
+        const cls = v.startsWith('Entrée')?'ok':(v.startsWith('Sortie auto')?'warn':'bad');
+        return `<span class="tag ${cls}">${v}</span>`;
+      }},
+      {title:'Détail', field:'Detail', widthGrow:2},
+      {title:'Agent', field:'Agent', widthGrow:1},
+      {title:'Montant (DH)', field:'Montant', hozAlign:'right', width:120,
+        formatter:c=>`<b style="color:${c.getValue()>=0?'#3fd6a4':'#e8556f'}">${c.getValue()>0?'+':''}${c.getValue()} DH</b>`}
+    ]
+  });
+
+  // ---- Avances actives ----
+  const agentsDistincts = [...new Set(rawLignes.map(l=>l.agent))].sort();
+  const selAvance = document.getElementById('caisseAvanceAgent');
+  const curSel = selAvance.value;
+  selAvance.innerHTML = '<option value="">Sélectionner un agent…</option>' + agentsDistincts.map(a=>`<option value="${a}">${a}</option>`).join('');
+  if(curSel) selAvance.value = curSel;
+
+  const avancesData = Object.entries(state.avances).filter(([,v])=>v!==0).map(([agent,montant])=>({agent, montant}));
+  if(window.tCaisseAvances) window.tCaisseAvances.destroy();
+  window.tCaisseAvances = new Tabulator('#table-caisse-avances', {
+    data:avancesData, layout:'fitDataStretch', height: avancesData.length?Math.min(80+avancesData.length*36,300)+'px':'80px',
+    placeholder:'Aucune avance active.',
+    columns:[
+      {title:'Agent', field:'agent', widthGrow:2},
+      {title:'Avance en cours (DH)', field:'montant', hozAlign:'right', width:160,
+        formatter:c=>`<b style="color:var(--amber)">${c.getValue()} DH</b>`},
+      {title:'', field:'_actions', width:120, formatter:()=> `<button class="btn" style="min-height:auto;padding:4px 8px;font-size:11px">Solder</button>`,
+        cellClick:async (e,cell)=>{
+          const agent = cell.getRow().getData().agent;
+          if(!confirm(`Solder entièrement l'avance de ${agent} ?`)) return;
+          const st = await loadCaisseState();
+          st.avanceHistorique.push({date:new Date().toISOString(), agent, ancien:st.avances[agent]||0, nouveau:0, motif:'Soldée manuellement'});
+          delete st.avances[agent];
+          await saveCaisseState(st);
+          renderCaisse();
+        }
+      }
+    ]
+  });
+
+  // ---- Récapitulatif par agent (Spéc 4.3) ----
+  const byAgent = {};
+  rawLignes.filter(l=>l.type==='MINT').forEach(l=>{
+    if(!byAgent[l.agent]) byAgent[l.agent] = {Agent:l.agent, BrutGenere:0, BrutPaye:0};
+    byAgent[l.agent].BrutGenere += l.brut;
+    if(l.statutPaiementBrut==='Payé') byAgent[l.agent].BrutPaye += l.brut;
+  });
+  agentsDistincts.forEach(a=>{ if(!byAgent[a]) byAgent[a] = {Agent:a, BrutGenere:0, BrutPaye:0}; });
+  const recapData = Object.values(byAgent).map(a=>{
+    const avance = state.avances[a.Agent]||0;
+    return { Agent:a.Agent, Avances:avance, BrutGenere:a.BrutGenere, BrutPaye:a.BrutPaye,
+      RestantDu: a.BrutGenere - a.BrutPaye - avance };
+  }).filter(a=>a.Avances!==0 || a.BrutGenere!==0).sort((x,y)=>y.RestantDu-x.RestantDu);
+  if(window.tCaisseAgents) window.tCaisseAgents.destroy();
+  window.tCaisseAgents = new Tabulator('#table-caisse-agents', {
+    data:recapData, layout:'fitDataStretch', height: recapData.length?Math.min(80+recapData.length*36,420)+'px':'80px',
+    placeholder:'Aucune donnée — importez un fichier de ventes.',
+    columns:[
+      {title:'Agent', field:'Agent', widthGrow:2},
+      {title:'Avances reçues (DH)', field:'Avances', hozAlign:'right', width:150,
+        formatter:c=>c.getValue()>0?`<span style="color:var(--amber)">${c.getValue()} DH</span>`:'—'},
+      {title:'Brut MINT généré (DH)', field:'BrutGenere', hozAlign:'right', width:160},
+      {title:'Brut MINT payé (DH)', field:'BrutPaye', hozAlign:'right', width:150},
+      {title:'Reste à payer (DH)', field:'RestantDu', hozAlign:'right', width:150,
+        formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`}
+    ]
+  });
+}
+
+/* ---- Formulaires Caisse : injection de fonds & attribution d'avance ---- */
+document.getElementById('caisseInjectBtn').addEventListener('click', async ()=>{
+  if(!canEditCaisse()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
+  const montant = parseFloat(document.getElementById('caisseInjectMontant').value);
+  const motif = document.getElementById('caisseInjectMotif').value.trim();
+  if(!montant || montant<=0){ alert('Indiquez un montant positif.'); return; }
+  const state = await loadCaisseState();
+  state.injections.push({ date:new Date().toISOString(), montant, motif: motif||'Injection manuelle' });
+  await saveCaisseState(state);
+  document.getElementById('caisseInjectMontant').value = '';
+  document.getElementById('caisseInjectMotif').value = '';
+  setStatus(`${montant} DH ajoutés à la caisse.`, 'ok');
+  renderCaisse();
+});
+document.getElementById('caisseAvanceBtn').addEventListener('click', async ()=>{
+  if(!canEditCaisse()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
+  const agent = document.getElementById('caisseAvanceAgent').value;
+  const montant = parseFloat(document.getElementById('caisseAvanceMontant').value);
+  const motif = document.getElementById('caisseAvanceMotif').value.trim();
+  if(!agent){ alert('Sélectionnez un agent.'); return; }
+  if(isNaN(montant) || montant<0){ alert('Indiquez un montant valide.'); return; }
+  const state = await loadCaisseState();
+  const ancien = state.avances[agent]||0;
+  state.avances[agent] = montant;
+  state.avanceHistorique.push({ date:new Date().toISOString(), agent, ancien, nouveau:montant, motif: motif||'Ajustement manuel' });
+  await saveCaisseState(state);
+  document.getElementById('caisseAvanceMontant').value = '';
+  document.getElementById('caisseAvanceMotif').value = '';
+  setStatus(`Avance de ${agent} mise à jour : ${ancien} DH → ${montant} DH.`, 'ok');
+  renderCaisse();
+});
+document.getElementById('exportCaisseAgentsBtn').addEventListener('click', ()=> exportTable(window.tCaisseAgents, 'sipp_caisse_recap_agents'));
+
+/* ---- Import du fichier Avance.xlsx (Spéc 3) : suggestion + confirmation obligatoire ---- */
+// heuristique de correspondance « prénom court → agent complet » : les entrées du fichier Avance
+// sont des prénoms informels (« absslam », « oussama ») bien trop courts pour la similarité globale
+// à 80% utilisée par harmoniseAgentNames() — on compare donc chaque prénom à CHAQUE TOKEN du nom
+// complet et on ne retient qu'une SUGGESTION, jamais une attribution automatique : une erreur ici
+// attribuerait de l'argent au mauvais agent.
+function suggestAgentForShortName(shortName, canonicalAgents){
+  if(typeof normalizeName !== 'function' || typeof levenshtein !== 'function') return null;
+  const n = normalizeName(shortName);
+  if(!n) return null;
+  let best = null, bestRatio = 1;
+  canonicalAgents.forEach(full=>{
+    normalizeName(full).split(' ').filter(Boolean).forEach(tok=>{
+      const d = levenshtein(n, tok);
+      const ratio = d / Math.max(n.length, tok.length);
+      if(ratio < bestRatio){ bestRatio = ratio; best = full; }
+    });
+  });
+  return (best && bestRatio <= 0.30) ? best : null; // ≥70% de similitude sur le meilleur token
+}
+document.getElementById('avanceFileInput').addEventListener('change', async function(e){
+  const file = this.files[0]; this.value=''; if(!file) return;
+  if(!canEditCaisse()){ showError('Action réservée aux profils Super Admin / Directeur.'); return; }
+  if(!window.XLSX){ showError('SheetJS non chargé — impossible de lire le fichier.'); return; }
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(new Uint8Array(buf), {type:'array'});
+  const firstSheet = wb.SheetNames[0];
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], {header:1, raw:false, defval:null});
+  const agentsDistincts = [...new Set(rawLignes.map(l=>l.agent))].sort();
+  const entries = rows
+    .map(r=>({ nomBrut:(r[0]||'').toString().trim(), dateBrut:(r[1]||'').toString().trim(), montantBrut:(r[2]||'').toString().trim() }))
+    .filter(r=>r.nomBrut && r.montantBrut)
+    .map(r=>{
+      const montant = parseFloat(r.montantBrut.replace(/[^0-9.,]/g,'').replace(',','.')) || 0;
+      const suggestion = suggestAgentForShortName(r.nomBrut, agentsDistincts);
+      return { nomBrut:r.nomBrut, dateBrut:r.dateBrut, montant, suggestion };
+    });
+  if(!entries.length){ showError('Aucune ligne exploitable trouvée dans le fichier.'); return; }
+
+  const list = document.getElementById('avanceImportList');
+  list.innerHTML = '';
+  entries.forEach((entry,idx)=>{
+    const row = document.createElement('div'); row.className = 'diff-row'; row.style.display='flex'; row.style.gap='10px'; row.style.alignItems='center';
+    const label = document.createElement('span'); label.style.minWidth='140px'; label.innerHTML = `<b>${entry.nomBrut}</b> <span style="color:var(--ink-dim)">(${entry.dateBrut}, ${entry.montant} DH)</span>`;
+    const sel = document.createElement('select'); sel.style.flex='1'; sel.dataset.idx = idx;
+    sel.innerHTML = '<option value="">— Ignorer cette ligne —</option>' + agentsDistincts.map(a=>`<option value="${a}" ${a===entry.suggestion?'selected':''}>${a}${a===entry.suggestion?' (suggéré)':''}</option>`).join('');
+    row.appendChild(label); row.appendChild(sel);
+    list.appendChild(row);
+  });
+  document.getElementById('avanceImportReview').style.display = 'block';
+  window._avanceImportEntries = entries;
+
+  document.getElementById('avanceImportCancel').onclick = ()=>{
+    document.getElementById('avanceImportReview').style.display = 'none';
+    list.innerHTML = ''; window._avanceImportEntries = null;
+  };
+  document.getElementById('avanceImportApply').onclick = async ()=>{
+    const selects = Array.from(list.querySelectorAll('select'));
+    const state = await loadCaisseState();
+    let applied = 0;
+    selects.forEach(sel=>{
+      const agent = sel.value;
+      if(!agent) return;
+      const entry = window._avanceImportEntries[+sel.dataset.idx];
+      const ancien = state.avances[agent]||0;
+      const nouveau = ancien + entry.montant; // les avances importées s'ADDITIONNENT à un solde existant
+      state.avances[agent] = nouveau;
+      state.avanceHistorique.push({ date:new Date().toISOString(), agent, ancien, nouveau, motif:`Import Avance.xlsx (${entry.nomBrut}, ${entry.dateBrut})` });
+      applied++;
+    });
+    await saveCaisseState(state);
+    document.getElementById('avanceImportReview').style.display = 'none';
+    list.innerHTML = ''; window._avanceImportEntries = null;
+    setStatus(`${applied} avance(s) appliquée(s) depuis Avance.xlsx.`, 'ok');
+    renderCaisse();
+  };
+});
 // Persistance auto (Fonctionnalité 4) : sauvegarde immédiate de la ligne éditée + des overrides de
 // la session, débouncée pour absorber les éditions rapprochées (ex. saisie clavier) sans spammer IndexedDB.
 let _autoSaveTimers = {};
@@ -2306,7 +2656,11 @@ function renderFinance(){
           if(r.Type==='MINT'){
             setOverride(r.id, 'statutPaiementBrut', cell.getValue());
             // à chaque passage "Payé" on horodate au jour du jour ; repasser "Non Payé" efface la date
-            if(cell.getValue()==='Payé') setOverride(r.id, 'datePaiementBrut', fmtDate(new Date()));
+            if(cell.getValue()==='Payé'){
+              setOverride(r.id, 'datePaiementBrut', fmtDate(new Date()));
+              const line = rawLignes.find(x=>x.id===r.id);
+              if(line) debitCaisseMint(line); // Spéc 2.2 : sortie automatique Caisse
+            }
             else setOverride(r.id, 'datePaiementBrut', null);
             renderFinanceSummary(); renderKPI(); renderPayroll(); renderCalendar();
           } else {
@@ -3336,6 +3690,7 @@ function bulkSetFriday(dateStr, value){
       if(value==='Non Payé' && l.statutPaiementBrut==='Payé'){ locked++; return; }
       setOverride(l.id, 'statutPaiementBrut', value);
       setOverride(l.id, 'datePaiementBrut', value==='Payé' ? fmtDate(new Date()) : null);
+      if(value==='Payé') debitCaisseMint(l); // Spéc 2.2 : sortie automatique Caisse
     }
   });
   renderFinance();  // rafraîchit aussi KPI/payroll via ses propres appels
