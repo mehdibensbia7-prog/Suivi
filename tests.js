@@ -17,7 +17,8 @@
    paymentWindow1520, computeAvanceCompensation, isBrutBlockedByAvance, brutAffecteAvance,
    acterCompensation (cœur décisionnel), renderPayroll / renderDuParAgent / renderFinanceSummary
    (agrégations cash), validation de restauration caisse, buildConsoIdentification (audit
-   fiabilité agent ConsoPilote, onglet Identification ConsoPilote).
+   fiabilité agent ConsoPilote, onglet Identification ConsoPilote), buildLignes — bloc fallback
+   CONSO Feuil2 seul + boucle de push (élargissement commission ConsoPilote, 2026-07-16).
    ============================================================================================ */
 (function(){
 'use strict';
@@ -274,6 +275,92 @@ function buildConsoIdentification(aBodies, statusSourcesRaw){
   });
   consoIdentification.sort((a,b)=> (a.contrat||'').localeCompare(b.contrat||''));
 }
+// overrides : simule le module-scope `overrides` d'index.html (paiements manuels par ligne).
+let overrides = {};
+// computeConsoFields : règle ConsoPilote (100 DH en 2 tranches conditionnées Signé+prélèvement actif).
+function computeConsoFields(lineId, dateVente, etatRaw, prelevRaw, legacy){
+  const r = getRegles();
+  const today = new Date(2026,6,16); // date fixe -> tests déterministes
+  const o = overrides[lineId] || {};
+  legacy = legacy || {};
+  const etatN = norm(etatRaw||'');
+  const prelevActif = /actif|active|oui|ok|yes|^1$/.test(norm(prelevRaw||''));
+  const isChute = /annul|resil|retract|refus/.test(etatN);
+  const isSigned = /sign|activ/.test(etatN);
+  const conditionsOK = isSigned && prelevActif && !isChute;
+  const dv = toDateSafe(dateVente);
+  const jours = dv ? Math.floor((today - dv)/86400000) : null;
+  const moisEcoules = dv ? monthsBetween(dv, today) : null;
+  const t1Date = dv ? new Date(dv.getFullYear(), dv.getMonth(), dv.getDate() + r.consoJourT1) : null;
+  const t2Date = dv ? new Date(dv.getFullYear(), dv.getMonth() + r.consoMoisClos, dv.getDate()) : null;
+  const t1Echue = jours!==null && jours >= r.consoJourT1;
+  const t2Echue = moisEcoules!==null && moisEcoules >= r.consoMoisClos;
+  const t1Paye = o.statutPaiementT1==='Payé' || o.statutPaiement==='Payé' || !!legacy.t1;
+  const t2Paye = o.statutPaiementT2==='Payé' || o.statutPaiement==='Payé' || !!legacy.t2;
+  const t1Due = t1Paye || (t1Echue && conditionsOK);
+  const t2Due = t2Paye || (t2Echue && conditionsOK);
+  const t2Perdue = t2Echue && !conditionsOK && !t2Paye;
+  const t1Perdue = isChute && !t1Due;
+  return {
+    statutCRM: etatRaw || 'Introuvable (CRM)',
+    prelevement: prelevRaw ? (prelevActif ? 'Actif' : String(prelevRaw)) : '—',
+    conditionsOK, enAttente: !conditionsOK, isChute,
+    total: 100, t1: 50, t2: 50,
+    t1Date, t1DateStr: fmtDate(t1Date), t2Date, t2DateStr: fmtDate(t2Date),
+    t1Echue, t2Echue, t1Due, t2Due, t1Perdue, t2Perdue,
+    statutPaiementT1: t1Paye ? 'Payé' : 'Non Payé',
+    statutPaiementT2: t2Paye ? 'Payé' : 'Non Payé',
+    net: (t1Due ? 50 : 0) + (t2Due ? 50 : 0),
+    moisEcoules
+  };
+}
+// runConsoPipeline : réplique le bloc fallback CONSO Feuil2 seul + la boucle de push de buildLignes
+// (élargissement commission ConsoPilote 2026-07-16) — garde anti-double-paiement structurelle
+// (consoGroups est un dict clé=n° contrat, au plus une entrée par contrat).
+function runConsoPipeline(consoGroups, statusMap, statusSourcesRaw){
+  const rawLignes = [];
+  let refSeen = {};
+  function stableId(prefix, ref){
+    refSeen[prefix+ref] = (refSeen[prefix+ref]||0) + 1;
+    const n = refSeen[prefix+ref];
+    return n===1 ? (prefix+'-'+ref) : (prefix+'-'+ref+'-dup'+n);
+  }
+  const seenConsoFeuil2 = {};
+  (statusSourcesRaw||[]).filter(s=>s.type==='feuil2').forEach(src=>{
+    const header = src.header;
+    const cB = {
+      ref: colIndexByNames(header, ['numero contract','numero de contrat','numéro contract','numéro de contrat']),
+      client: colIndexByNames(header, ['nom']),
+      commercial: colIndexByNames(header, ['nom du commercial','nom du c omercial','nom commercial'])
+    };
+    if(cB.ref===-1) return;
+    (src.rows||[]).slice(src.idx+1).forEach(row=>{
+      if(!row) return;
+      const ref = normalizeRef(row[cB.ref]);
+      if(!ref) return;
+      if(consoGroups[ref]) return;
+      if(seenConsoFeuil2[ref]) return;
+      const client = cB.client!==-1 ? (row[cB.client]||'').toString().trim() : '';
+      const agent = cB.commercial!==-1 ? (row[cB.commercial]||'').toString().trim() : '';
+      if(!client && !agent) return;
+      seenConsoFeuil2[ref] = true;
+      consoGroups[ref] = { ref, agent, client, dateVente:null, sources:[`${src.fileName}:${src.sheetName}`], agentNonConfirme:true };
+    });
+  });
+  Object.values(consoGroups).forEach(item=>{
+    const lineId = stableId('CONSO', item.ref);
+    const st = statusMap[item.ref] || null;
+    const fields = computeConsoFields(lineId, item.dateVente, st ? st.etat : null, st ? st.prelev : null);
+    rawLignes.push(Object.assign({
+      id: lineId, type:'CONSO', agent:item.agent || '(agent non renseigné)',
+      dateVente:item.dateVente, dateVenteStr: fmtDate(item.dateVente),
+      contrat:item.ref, client:item.client, produit:'ConsoPilote',
+      agentSourceConfirme: !item.agentNonConfirme,
+      sourceInfo: item.sources.join(' ; ')
+    }, fields));
+  });
+  return rawLignes;
+}
 
 /* ===================== CADRE DE TEST ===================== */
 let pass=0, fail=0; const log=[];
@@ -478,6 +565,66 @@ sec('S8 · buildConsoIdentification — 100% des ventes ConsoPilote, fiabilité 
   const r220711 = consoIdentification.find(r=>r.contrat==='220711');
   eq('traçabilité liée (contrat énergie + date vente)', {ce:r220711.contratEnergieLie, dv:r220711.dateVenteLiee}, {ce:'1810989', dv:'23/06/2026'});
   eq('vente Feuil1 avec contrat conso="0" ignorée (isEmptyConso)', consoIdentification.some(r=>r.client==='SansLien Client'), false);
+})();
+
+/* ===================== S9 — Élargissement commission ConsoPilote (fallback Feuil2 seul) ===================== */
+sec('S9 · runConsoPipeline — 100% des ventes commissionnées, ZÉRO double paiement');
+(function(){
+  overrides = {};
+  // 9 contrats liés Feuil1 (comme sur les données réelles du projet)
+  const consoGroups = {};
+  const liees = [['213145','Mouad ELBRAHMI'],['215213','Amine Jennane'],['220711','Yassir Bouhdadi']];
+  liees.forEach(([ref,agent])=>{ consoGroups[ref] = { ref, agent, client:'Client '+ref, dateVente:new Date(2026,5,15), sources:['Feuil1.xlsx:Feuil1'] }; });
+  const statusMap = {
+    '213145':{etat:'Signé',prelev:'actif'}, '215213':{etat:'Signé',prelev:'actif'}, '220711':{etat:'Signé',prelev:'actif'},
+    '213815':{etat:'Signé',prelev:'actif'}, '218185':{etat:'Signé',prelev:'actif'}
+  };
+  const headerF2 = ['nom ','telephone','numero contract','statut','prelevement','nom du c omercial'];
+  const rowsF2 = [
+    ['Umar Khan','x','213145','signé','actif','Mouad ELBRAHMI'],
+    ['Paul Nogues','x','215213','signé','actif','Amine Jennane'],
+    ['Julienne M','x','220711','signé','actif','Yassir Bouhdadi'],
+    ['Werrad Sekrane','x','213815','signé','actif','Oussama Hmamou'], // sans lien Feuil1 -> fallback
+    ['Mbarka Lakhal','x','218185','signé','actif','Salah eddine Elghazzawy'] // sans lien Feuil1 -> fallback
+  ];
+  const fullRowsF2 = [headerF2, ...rowsF2];
+  // DEUX sources Feuil2 IDENTIQUES (simule 2 fichiers réels partageant la même feuille ConsoPilote)
+  // -> vérifie que la dédup empêche tout double paiement même en cas d'import multi-fichiers.
+  const statusSourcesRaw = [
+    { type:'feuil2', fileName:'A.xlsx', sheetName:'Feuil2', idx:0, rows:fullRowsF2, header:headerF2 },
+    { type:'feuil2', fileName:'B.xlsx', sheetName:'Consopilote Juin', idx:0, rows:fullRowsF2, header:headerF2 }
+  ];
+
+  const result = runConsoPipeline(consoGroups, statusMap, statusSourcesRaw);
+  eq('5 lignes au total (3 liées + 2 fallback), aucun doublon malgré 2 fichiers Feuil2 identiques', result.length, 5);
+  eq('5 contrats uniques', new Set(result.map(r=>r.contrat)).size, 5);
+
+  const r213145 = result.find(r=>r.contrat==='213145');
+  eq('contrat lié Feuil1 : agent Feuil1, date réelle, confirmé', {a:r213145.agent, dv:!!r213145.dateVente, conf:r213145.agentSourceConfirme}, {a:'Mouad ELBRAHMI', dv:true, conf:true});
+
+  const r213815 = result.find(r=>r.contrat==='213815');
+  eq('fallback : agent Feuil2, date NULLE, non confirmé', {a:r213815.agent, dv:r213815.dateVente, conf:r213815.agentSourceConfirme}, {a:'Oussama Hmamou', dv:null, conf:false});
+  eq('fallback : conditions calculées normalement (statut/prélèvement réels connus)', r213815.conditionsOK, true);
+  eq('fallback : net=0 par défaut (rien exigible sans date connue)', r213815.net, 0);
+  eq('fallback : aucune échéance calculable (t1Date/t2Date null)', {t1:r213815.t1Date, t2:r213815.t2Date}, {t1:null, t2:null});
+
+  // override manuel "Payé" sur un fallback (sans date) doit rester honoré (décision manager explicite)
+  overrides['CONSO-218185'] = { statutPaiementT1:'Payé', statutPaiementT2:'Non Payé' };
+  const result2 = runConsoPipeline(
+    { '213145':{ref:'213145',agent:'Mouad ELBRAHMI',client:'C',dateVente:new Date(2026,5,15),sources:['x']} },
+    { '218185':{etat:'Signé',prelev:'actif'} },
+    [{ type:'feuil2', fileName:'A.xlsx', sheetName:'Feuil2', idx:0, rows:fullRowsF2, header:headerF2 }]
+  );
+  const r218185 = result2.find(r=>r.contrat==='218185');
+  eq('override manuel T1=Payé sur fallback -> honoré malgré l\'absence de date', {t1:r218185.statutPaiementT1, net:r218185.net}, {t1:'Payé', net:50});
+
+  // régression : un contrat Feuil1 SANS Feuil2 correspondante reste inchangé (comportement historique)
+  overrides = {};
+  const resultSolo = runConsoPipeline({ '555555':{ref:'555555',agent:'Agent Solo',client:'C',dateVente:new Date(2026,5,1),sources:['x']} }, {}, []);
+  eq('contrat Feuil1 sans Feuil2 : toujours créé, confirmé (régression)', {n:resultSolo.length, conf:resultSolo[0].agentSourceConfirme}, {n:1, conf:true});
+
+  // aucune source du tout -> aucune ligne fantôme
+  eq('aucune source -> aucune ligne créée', runConsoPipeline({}, {}, []).length, 0);
 })();
 
 /* ===================== RÉSULTAT ===================== */

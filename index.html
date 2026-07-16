@@ -472,13 +472,13 @@
   <div class="tab" id="tab-identification">
     <div class="panel">
       <h2>Identification ConsoPilote — fiabilité de l'attribution agent
-        <span class="sub">— constat d'audit (2026-07-16) : le moteur de commissionnement ne crée une ligne ConsoPilote que si un contrat est également référencé dans une vente MINT (Feuil1) ; une vente ConsoPilote sans ce lien n'apparaît donc nulle part ailleurs dans l'application. Cet onglet affiche les 100% des ventes ConsoPilote importées et signale, pour chacune, si l'agent peut être confirmé par recoupement (Feuil1 + Feuil2 concordants) ou seulement déclaré par une source unique — non affecté par le filtre de période (audit exhaustif).</span>
+        <span class="sub">— constat d'audit (2026-07-16), depuis élargi (même jour, décision Direction) : toute vente ConsoPilote est désormais commissionnée (visible en Trésorerie/KPI/Mes Ventes), y compris sans ligne Feuil1 correspondante — agent Feuil2 utilisé comme meilleure estimation. Cet onglet reste la référence d'audit : il affiche les 100% des ventes ConsoPilote importées et signale, pour chacune, si l'agent est confirmé par recoupement (Feuil1 + Feuil2 concordants) ou seulement déclaré par une source unique — non affecté par le filtre de période (audit exhaustif).</span>
         <button class="btn" id="exportIdentificationBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button>
       </h2>
       <div class="summary-grid" id="identification-summary"></div>
       <div class="legend" style="margin-top:10px;margin-bottom:10px">
         <b>Méthode</b> : pour chaque vente ConsoPilote, le n° de contrat est recherché dans la colonne « Numéro Contrat ConsoPilote » de Feuil1 (ventes MINT), qui porte l'agent au moment de la vente d'origine.
-        <b>Confirmé</b> = contrat retrouvé et agent concordant entre les deux sources. <b>Non recoupé</b> = contrat absent de Feuil1 — l'agent déclaré par la feuille ConsoPilote est conservé comme meilleure estimation, avec le commentaire « agent propriétaire non identifié ». <b>Conflit</b> = contrat retrouvé mais agents discordants entre les deux sources.
+        <b>Confirmé</b> = contrat retrouvé et agent concordant entre les deux sources — commissionné normalement (date de vente réelle, échéances J+45/2 mois calculées). <b>Non recoupé</b> = contrat absent de Feuil1 — l'agent déclaré par la feuille ConsoPilote est conservé comme meilleure estimation et commissionné (commentaire « agent propriétaire non identifié » conservé pour traçabilité), mais sans date de vente connue : aucune échéance n'est calculée automatiquement, le paiement des tranches exige une décision manager explicite (case à cocher manuelle dans l'onglet Trésorerie). <b>Conflit</b> = contrat retrouvé dans les deux sources mais agents discordants — commissionné via l'agent Feuil1 (comportement inchangé, priorité à la source liée à la vente d'origine) ; l'écart reste visible ici pour revue manuelle.
       </div>
       <div id="table-identification" class="table-scroll"></div>
     </div>
@@ -1375,7 +1375,7 @@ function autoDetectAndProcess(){
       fileName: src.fileName,
       sheetName: src.sheetName
     }));
-    buildLignes(aBodies, statusMap, statusSources.length > 0);
+    buildLignes(aBodies, statusMap, statusSources.length > 0, statusSources);
     harmoniseAgentNames(); // dédoublonnage automatique des noms d'agent (similitude ≥80%)
     buildConsoIdentification(aBodies, statusSources); // audit fiabilité agent ConsoPilote (100% des ventes, indépendant de rawLignes)
     renderAll();
@@ -2752,7 +2752,7 @@ function harmoniseAgentNames(){
   return merged;
 }
 
-function buildLignes(aSources, statusMap, hasCRM){
+function buildLignes(aSources, statusMap, hasCRM, statusSourcesRaw){
   rawLignes = [];
   const today = new Date();
   const refSeen = {};
@@ -2821,6 +2821,49 @@ function buildLignes(aSources, statusMap, hasCRM){
     });
   });
 
+  /* ---- CONSO Feuil2 seul (fallback, élargissement demandé par la Direction 2026-07-16) ----
+     Constat de l'audit « Identification ConsoPilote » : une vente ConsoPilote sans ligne Feuil1
+     correspondante restait invisible de toute l'application (Trésorerie, KPI, Mes Ventes) alors que
+     la commission est bien due. On l'ajoute désormais à consoGroups avec l'agent déclaré par
+     ConsoPilote lui-même — SEULEMENT si le contrat n'a AUCUNE entrée Feuil1 existante.
+     Garde anti-double-paiement (double, structurelle) :
+       1. `if(consoGroups[ref]) return` — un contrat déjà lié via Feuil1 n'est jamais réécrit ici :
+          Feuil1 reste l'unique source pour ce contrat, sa ligne existante n'est ni dupliquée ni modifiée.
+       2. `if(seenConsoFeuil2[ref]) return` — si le même contrat apparaît dans plusieurs feuilles/fichiers
+          Feuil2 chargés simultanément, une seule entrée est créée (le premier import gagne).
+     Résultat : `consoGroups` est un dictionnaire clé=n° de contrat → AU PLUS une entrée par contrat,
+     donc `Object.values(consoGroups).forEach` ci-dessous ne peut produire qu'UNE SEULE ligne CONSO
+     par contrat — aucun chemin ne permet de compter deux fois la même commission.
+     Sans date de vente propre (Feuil2 n'en porte pas), les échéances J+45/2 mois ne sont PAS
+     calculées automatiquement — computeConsoFields gère nativement une date nulle (net=0 tant qu'un
+     statut n'est pas validé manuellement) : la vente devient visible et commissionnable via une
+     décision manager explicite, jamais via un calcul automatique sur une date fictive. Conséquence
+     assumée : ces lignes n'apparaissent que sous « Toute la période » (periodMatch exclut toute ligne
+     sans date dès qu'un filtre de période est actif) — pas de date réelle, pas de faux positif de
+     filtrage par mois/trimestre. */
+  const seenConsoFeuil2 = {};
+  (statusSourcesRaw||[]).filter(s=>s.type==='feuil2').forEach(src=>{
+    const header = src.header;
+    const cB = {
+      ref: colIndexByNames(header, ['numero contract','numero de contrat','numéro contract','numéro de contrat']),
+      client: colIndexByNames(header, ['nom']),
+      commercial: colIndexByNames(header, ['nom du commercial','nom du c omercial','nom commercial'])
+    };
+    if(cB.ref===-1) return;
+    (src.rows||[]).slice(src.idx+1).forEach(row=>{
+      if(!row) return;
+      const ref = normalizeRef(row[cB.ref]);
+      if(!ref) return;
+      if(consoGroups[ref]) return; // déjà lié via Feuil1 — Feuil1 reste seule source, aucune écriture ici
+      if(seenConsoFeuil2[ref]) return; // déjà ajouté depuis une autre feuille/fichier Feuil2 — pas de doublon
+      const client = cB.client!==-1 ? (row[cB.client]||'').toString().trim() : '';
+      const agent = cB.commercial!==-1 ? (row[cB.commercial]||'').toString().trim() : '';
+      if(!client && !agent) return; // ligne vide en fin de feuille
+      seenConsoFeuil2[ref] = true;
+      consoGroups[ref] = { ref, agent, client, dateVente:null, sources:[`${src.fileName}:${src.sheetName}`], agentNonConfirme:true };
+    });
+  });
+
   function stableId(prefix, ref){
     refSeen[prefix+ref] = (refSeen[prefix+ref]||0) + 1;
     const n = refSeen[prefix+ref];
@@ -2883,7 +2926,9 @@ function buildLignes(aSources, statusMap, hasCRM){
   });
 
   Object.values(consoGroups).forEach(item=>{
-    if(!item.dateVente) return;
+    // Note : plus de garde « if(!item.dateVente) return » ici — les entrées Feuil1 ont TOUJOURS une
+    // date (filtrées en amont dès la lecture des lignes brutes) ; les entrées Feuil2-seul (fallback
+    // ci-dessus) ont délibérément dateVente=null, et doivent malgré tout produire une ligne visible.
     const lineId = stableId('CONSO', item.ref);
     const st = statusMap[item.ref] || null;
     // règle ConsoPilote : 100 DH en 2 tranches conditionnées (Signé + prélèvement actif) — voir computeConsoFields
@@ -2892,6 +2937,9 @@ function buildLignes(aSources, statusMap, hasCRM){
       id: lineId, type:'CONSO', agent:item.agent || '(agent non renseigné)',
       dateVente:item.dateVente, dateVenteStr: fmtDate(item.dateVente),
       contrat:item.ref, client:item.client, produit:'ConsoPilote',
+      // agentSourceConfirme=false : agent déclaré par ConsoPilote seul, non confirmé par une ligne
+      // MINT (voir onglet Identification ConsoPilote pour le détail agent Feuil1/Feuil2/fiabilité).
+      agentSourceConfirme: !item.agentNonConfirme,
       sourceInfo: item.sources.join(' ; ')
     }, fields));
   });
