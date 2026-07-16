@@ -1,0 +1,14 @@
+# Fichiers de verrou Office (créés quand un classeur est ouvert dans Excel)
+~$*
+
+# Sauvegardes locales de travail (créées avant les grosses modifications)
+index.pre-*.backup.html
+*.currentbackup
+
+# Configuration locale de l'éditeur
+.vscode/
+
+# Données métier sensibles — ne jamais publier sur GitHub :
+# avances nominatives des agents et exports de ventes récents
+Avance.xlsx
+tableau statut brut (*.xlsx
