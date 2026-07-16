@@ -615,6 +615,7 @@ function doLogout(reason){
   currentRole = null; currentAgentName = null; selectedRole = null;
   // purge des données sensibles chargées en mémoire pour cette session
   rawLignes = []; overrides = {};
+  window.rawLignes = rawLignes; // garde window.rawLignes synchronisé (voir renderAll)
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('loginOverlay').style.display = 'flex';
   document.getElementById('loginStep2').style.display = 'none';
@@ -1888,6 +1889,12 @@ function buildLignes(aSources, statusMap, hasCRM){
 
 /* ============================= RENDU TABLES ============================= */
 function renderAll(){
+  // Faille corrigée : `let rawLignes` déclaré en tête de script ne s'attache jamais à `window`
+  // en JavaScript — compare_expected.js teste systématiquement `window.rawLignes`, qui restait
+  // donc toujours `undefined` même après un import réussi, rendant "Comparer attendu",
+  // "Vérifier règles métier" et les corrections orthographiques d'agents silencieusement
+  // inopérants. On resynchronise explicitement à chaque rendu.
+  window.rawLignes = rawLignes;
   renderSuivi();
   renderFinance();
   renderKPI();
