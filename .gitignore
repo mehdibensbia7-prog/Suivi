@@ -5,14 +5,23 @@
 index.pre-*.backup.html
 *.currentbackup
 
-# Configuration locale de l'éditeur
+# Configuration locale de l'éditeur / outillage
 .vscode/
+.claude/
 
 # Données métier sensibles — ne jamais publier sur GitHub :
 # avances nominatives des agents et exports de ventes (noms de clients/agents, contrats)
 Avance.xlsx
 tableau statut brut*.xlsx
 ASK Call*.xlsx
+ConsoPilote_*.xlsx
+*_Ventes_*.xlsx
+# Sauvegardes complètes SIPP (contiennent TOUTES les données — jamais sur GitHub)
+sipp_sauvegarde_*.json
+sipp_sauvegarde_*.json.enc
+sipp_overrides_*.json
+session_*.json
+session_*.json.enc
 
 # Anciennes copies de l'interface (retirées du dépôt le 2026-07-16 — la vraie
 # application est UNIQUEMENT index.html ; pour restaurer une version : git log / git checkout)

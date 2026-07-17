@@ -29,6 +29,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer onerror="window.__xlsxLoadFailed=true; loadLocalXlsxFallback();"></script>
 <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
 <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js" defer></script>
+<!-- Chart.js : graphiques stratégiques (T0+ 2026-07-17). defer = ne bloque pas le premier rendu ;
+     window.__chartFailed permet un rendu dégradé gracieux si le CDN est injoignable (charts masqués,
+     les tableaux restent la source de vérité). -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer onerror="window.__chartFailed=true;"></script>
 <style>
   :root{
     --bg:#0b1220; --panel:#111c2f; --panel2:#0e1830; --line:#1f2f4a;
@@ -61,13 +65,25 @@
   .tab{display:none;}
   .tab.active{display:block;}
   .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px;}
-  .stat-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  .stat-card{position:relative;overflow:hidden;background:linear-gradient(160deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:12px;padding:14px 16px 14px 18px;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease;}
+  .stat-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--ink-dim);opacity:.85;}
+  .stat-card:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.28);}
   .stat-card .label{font-size:11px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.06em;font-family:var(--mono);}
-  .stat-card .value{font-size:22px;font-weight:700;margin-top:4px;font-family:var(--mono);}
-  .stat-card.mint .value{color:var(--mint);}
-  .stat-card.amber .value{color:var(--amber);}
-  .stat-card.red .value{color:var(--red);}
-  .stat-card.blue .value{color:var(--blue);}
+  .stat-card .value{font-size:22px;font-weight:700;margin-top:4px;font-family:var(--mono);letter-spacing:-.01em;}
+  .stat-card.mint .value{color:var(--mint);} .stat-card.mint::before{background:var(--mint);}
+  .stat-card.amber .value{color:var(--amber);} .stat-card.amber::before{background:var(--amber);}
+  .stat-card.red .value{color:var(--red);} .stat-card.red::before{background:var(--red);}
+  .stat-card.blue .value{color:var(--blue);} .stat-card.blue::before{background:var(--blue);}
+
+  /* --- Graphiques stratégiques (Chart.js, T0+) --- */
+  .chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:18px;}
+  .chart-card{background:linear-gradient(160deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:12px;padding:16px 18px;}
+  .chart-card h3{margin:0 0 4px;font-size:13.5px;font-weight:700;letter-spacing:-.01em;}
+  .chart-card .chart-sub{margin:0 0 12px;font-size:11.5px;color:var(--ink-dim);font-family:var(--mono);}
+  .chart-holder{position:relative;height:260px;}
+  .chart-holder.tall{height:320px;}
+  .chart-card.wide{grid-column:1 / -1;}
+  @media (max-width:640px){ .chart-holder{height:220px;} .chart-grid{grid-template-columns:1fr;} }
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:18px;}
   .panel h2{margin:0 0 12px;font-size:15px;}
   .panel h2 .sub{color:var(--ink-dim);font-weight:400;font-size:12px;}
@@ -253,6 +269,10 @@
   <span style="width:1px;height:22px;background:var(--line);"></span>
   <button class="btn" id="exportOverridesBtn">Exporter l'état (JSON)</button>
   <label class="btn file-btn" id="stateInputLabel" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);">Importer l'état<input type="file" id="stateInput" accept=".json"></label>
+  <span style="width:1px;height:22px;background:var(--line);"></span>
+  <button class="btn primary" id="fullBackupBtn" title="Sauvegarde COMPLÈTE de toutes les données (ventes, sessions, caisse, réglages) dans un fichier chiffré à conserver hors de cette machine (clé USB, cloud). C'est la vraie protection contre la perte de données.">💾 Sauvegarde complète</button>
+  <label class="btn file-btn" id="fullRestoreLabel" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);" title="Restaurer toutes les données depuis un fichier de sauvegarde complète (.enc ou .json).">♻ Restaurer<input type="file" id="fullRestoreInput" accept=".enc,.json,.json.enc"></label>
+  <span id="backupIndicator" title="État de la dernière sauvegarde complète" style="display:none;font-family:var(--mono);font-size:11px;padding:5px 10px;border-radius:20px;border:1px solid var(--line);white-space:nowrap;"></span>
   <button class="btn primary" id="exportFinanceBtn">Exporter Trésorerie (.xlsx)</button>
   <button class="btn" id="compareExpectedBtn">Comparer attendu</button>
   <button class="btn" id="exportAuditBtn">Exporter audit</button>
@@ -304,6 +324,18 @@
 
   <div class="tab" id="tab-finance">
     <div class="summary-grid" id="finance-summary"></div>
+    <div class="chart-grid" id="finance-charts" style="display:none">
+      <div class="chart-card">
+        <h3>💰 Payé vs Restant dû — par catégorie</h3>
+        <p class="chart-sub">Brut MINT · Activation · ConsoPilote (période active)</p>
+        <div class="chart-holder"><canvas id="chartFinanceStack"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>🎯 Répartition du reste à payer</h3>
+        <p class="chart-sub">Ce qui reste à décaisser, par nature</p>
+        <div class="chart-holder"><canvas id="chartFinanceDonut"></canvas></div>
+      </div>
+    </div>
     <div class="panel">
       <h2>Agenda des règles financières <span class="sub">— bornes de dates qui sécurisent le calcul du net et du décommissionnement</span></h2>
       <div id="reglesContent" class="legend" style="margin-top:0"></div>
@@ -340,6 +372,23 @@
   </div>
 
   <div class="tab" id="tab-kpi">
+    <div class="chart-grid" id="kpi-charts" style="display:none">
+      <div class="chart-card wide">
+        <h3>🏆 Top agents — Net généré (DH)</h3>
+        <p class="chart-sub">Classement par rémunération nette produite (période active)</p>
+        <div class="chart-holder tall"><canvas id="chartKpiNet"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>📉 Causes de chute</h3>
+        <p class="chart-sub">Répartition des contrats MINT tombés</p>
+        <div class="chart-holder"><canvas id="chartKpiChutes"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>✅ Taux d'activation MINT — global</h3>
+        <p class="chart-sub">Part des ventes MINT activées vs non activées</p>
+        <div class="chart-holder"><canvas id="chartKpiActivation"></canvas></div>
+      </div>
+    </div>
     <div class="panel">
       <h2>Performance par agent <button class="btn" id="exportKpiBtn" style="float:right;min-height:auto;padding:6px 10px;font-size:12px;">⭳ Exporter (.xlsx)</button></h2>
       <div id="table-kpi" class="table-scroll"></div>
@@ -825,6 +874,10 @@ function applyRolePermissions(){
 
   document.getElementById('exportOverridesBtn').style.display = p.manageState ? '' : 'none';
   document.getElementById('stateInputLabel').style.display = p.manageState ? '' : 'none';
+  // Sauvegarde complète (S1) : même périmètre que l'export/import d'état
+  document.getElementById('fullBackupBtn').style.display = p.manageState ? '' : 'none';
+  document.getElementById('fullRestoreLabel').style.display = p.manageState ? '' : 'none';
+  updateBackupIndicator();
   document.getElementById('exportFinanceBtn').style.display = p.tabs.includes('finance') ? '' : 'none';
   // Contrats corrigés : réservé Super Admin / Directeur (même périmètre que Caisse — visibilité
   // financière sensible, règle Direction 2026-07-17).
@@ -1862,6 +1915,7 @@ async function loadCaisseState(){
 }
 async function saveCaisseState(state){
   await openSippDB();
+  markDirtySinceBackup(); // la caisse a changé → sauvegarde à refaire
   return new Promise((resolve,reject)=>{
     const tx = sippDB.transaction(['caisse'],'readwrite');
     tx.objectStore('caisse').put(state);
@@ -2420,6 +2474,7 @@ let _autoSaveTimers = {};
 function autoSaveLine(id){
   const sessionId = getCurrentSessionId();
   if(!sessionId || !sippDB) return;
+  markDirtySinceBackup(); // une donnée a changé → la dernière sauvegarde n'est plus à jour
   clearTimeout(_autoSaveTimers[id]);
   _autoSaveTimers[id] = setTimeout(async ()=>{
     try{
@@ -2749,6 +2804,147 @@ async function encryptAndDownload(plaintext, pass, filename){
   const blob = new Blob([JSON.stringify(payload)],{type:'application/json'});
   const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
 }
+
+/* ============================= SAUVEGARDE COMPLÈTE (S1 — protection hors-machine) =============================
+   Contrairement à « Exporter l'état (JSON) » qui ne sauvegarde QUE les overrides (statuts de paiement), la
+   sauvegarde complète dumpe TOUTES les données : les 3 stores IndexedDB (sessions, lignes, caisse) + les
+   réglages localStorage (règles financières, mapping agents, session active, overrides). C'est le seul export
+   qui permet de tout reconstruire si la machine/le navigateur est perdu. Chiffrement réutilisé : AES-GCM via
+   encryptAndDownload (déjà présent). Un indicateur permanent + un avertissement à la fermeture rappellent de
+   sauvegarder tant que des modifications n'ont pas été mises à l'abri. */
+const BACKUP_SETTINGS_KEYS = ['sipp.currentSessionId','sipp.reglesFinancieres','sipp.agentCanonicalMap','sipp.overrides'];
+
+function getAllFromStore(storeName){
+  return new Promise((resolve,reject)=>{
+    if(!sippDB || !sippDB.objectStoreNames.contains(storeName)) return resolve([]);
+    const tx = sippDB.transaction([storeName],'readonly');
+    const req = tx.objectStore(storeName).getAll();
+    req.onsuccess = ()=> resolve(req.result||[]);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function buildFullBackupPayload(){
+  await openSippDB();
+  const [sessions, lignes, caisse] = await Promise.all([
+    getAllFromStore('sessions'), getAllFromStore('lignes'), getAllFromStore('caisse')
+  ]);
+  const settings = {};
+  BACKUP_SETTINGS_KEYS.forEach(k=>{ const v = localStorage.getItem(k); if(v!==null) settings[k]=v; });
+  return {
+    __sippBackup: true, version: 2, exportedAt: new Date().toISOString(),
+    exportedBy: currentRole||'unknown',
+    stores: { sessions, lignes, caisse }, settings
+  };
+}
+
+async function exportFullBackup(){
+  if(!canManageState()){ showError('Action réservée aux profils autorisés (Super Admin / Directeur / Qualité).'); return; }
+  try{
+    const payload = await buildFullBackupPayload();
+    const txt = JSON.stringify(payload);
+    const nS = payload.stores.sessions.length, nL = payload.stores.lignes.length, nC = payload.stores.caisse.length;
+    const pass = prompt(
+      `Sauvegarde complète : ${nS} session(s), ${nL} ligne(s), ${nC} registre(s) caisse.\n\n`+
+      `Saisir une passphrase pour CHIFFRER le fichier (fortement recommandé — laisser vide = non chiffré).\n`+
+      `⚠ Notez bien cette passphrase : sans elle, la sauvegarde est irrécupérable.`
+    );
+    if(pass===null) return; // annulé
+    const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+    if(pass.trim()){
+      await encryptAndDownload(txt, pass.trim(), `sipp_sauvegarde_${stamp}.json.enc`);
+    } else {
+      const blob = new Blob([txt],{type:'application/json'});
+      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`sipp_sauvegarde_${stamp}.json`; a.click();
+    }
+    markBackupDone();
+    setStatus(`Sauvegarde complète générée (${nL} ligne(s)). Conservez le fichier hors de cette machine.`, 'ok');
+  }catch(e){ showError('Sauvegarde échouée : '+(e&&e.message||e)); }
+}
+
+async function importFullBackup(file){
+  if(!canManageState()){ showError('Action réservée aux profils autorisés (Super Admin / Directeur / Qualité).'); return; }
+  try{
+    let txt = await file.text();
+    let payload;
+    try{ payload = JSON.parse(txt); }catch(e){ showError('Fichier de sauvegarde illisible (JSON invalide).'); return; }
+    // fichier chiffré (.enc) : {salt, iv, ct}
+    if(payload && payload.ct && payload.salt && payload.iv){
+      const pass = prompt('Passphrase pour déchiffrer la sauvegarde :');
+      if(pass===null) return;
+      try{
+        const key = await deriveKeyFromPass(pass.trim(), payload.salt);
+        const ctBytes = Uint8Array.from(atob(payload.ct), c=>c.charCodeAt(0));
+        const plainBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv:new Uint8Array(payload.iv)}, key, ctBytes);
+        payload = JSON.parse(new TextDecoder().decode(plainBuf));
+      }catch(e){ showError('Déchiffrement impossible — passphrase incorrecte ou fichier corrompu.'); return; }
+    }
+    if(!payload || !payload.__sippBackup || !payload.stores){
+      showError('Ce fichier n\'est pas une sauvegarde complète SIPP (utilisez « Importer l\'état » pour un export partiel).'); return;
+    }
+    const nS=(payload.stores.sessions||[]).length, nL=(payload.stores.lignes||[]).length, nC=(payload.stores.caisse||[]).length;
+    if(!confirm(
+      `Restaurer cette sauvegarde ?\n\n• ${nS} session(s), ${nL} ligne(s), ${nC} registre(s) caisse\n`+
+      `• Exportée le : ${payload.exportedAt ? new Date(payload.exportedAt).toLocaleString('fr-FR') : '—'}\n\n`+
+      `⚠ Les données actuelles de cette machine seront REMPLACÉES par celles de la sauvegarde.`
+    )) return;
+    await openSippDB();
+    // écrase chaque store puis réinjecte
+    await new Promise((resolve,reject)=>{
+      const tx = sippDB.transaction(['sessions','lignes','caisse'],'readwrite');
+      tx.oncomplete = resolve; tx.onerror = ()=>reject(tx.error);
+      ['sessions','lignes','caisse'].forEach(name=>{
+        const store = tx.objectStore(name);
+        store.clear();
+        (payload.stores[name]||[]).forEach(rec=>{ try{ store.put(rec); }catch(e){ console.warn('put échoué', name, e); } });
+      });
+    });
+    // réglages localStorage
+    if(payload.settings) Object.entries(payload.settings).forEach(([k,v])=>{ if(BACKUP_SETTINGS_KEYS.includes(k)) localStorage.setItem(k,v); });
+    try{ overrides = JSON.parse(localStorage.getItem('sipp.overrides')||'{}'); }catch(e){ overrides = {}; }
+    markBackupDone();
+    setStatus(`Sauvegarde restaurée : ${nL} ligne(s). Rechargez la page pour réafficher toutes les données.`, 'ok');
+    alert('Restauration terminée. La page va se recharger pour réafficher les données restaurées.');
+    location.reload();
+  }catch(e){ showError('Restauration échouée : '+(e&&e.message||e)); }
+}
+
+/* ---- Indicateur de sauvegarde + suivi « modifié depuis la dernière sauvegarde » ---- */
+function markBackupDone(){
+  localStorage.setItem('sipp.lastBackupAt', new Date().toISOString());
+  localStorage.setItem('sipp.dirtySinceBackup','false');
+  updateBackupIndicator();
+}
+function markDirtySinceBackup(){
+  if(localStorage.getItem('sipp.dirtySinceBackup')!=='true'){
+    localStorage.setItem('sipp.dirtySinceBackup','true');
+    updateBackupIndicator();
+  }
+}
+function updateBackupIndicator(){
+  const el = document.getElementById('backupIndicator');
+  if(!el) return;
+  if(!canManageState()){ el.style.display='none'; return; }
+  el.style.display = '';
+  const lastIso = localStorage.getItem('sipp.lastBackupAt');
+  const dirty = localStorage.getItem('sipp.dirtySinceBackup')==='true';
+  const last = lastIso ? new Date(lastIso) : null;
+  const days = last ? Math.floor((Date.now()-last.getTime())/86400000) : null;
+  let color, bg, txt;
+  if(!last){
+    color='var(--red)'; bg='#3a1520'; txt='⚠ Jamais sauvegardé';
+  } else if(dirty || (days!==null && days>=7)){
+    color='var(--amber)'; bg='#3a2a10';
+    txt = dirty ? `● Modifs non sauvegardées (dernière : ${last.toLocaleDateString('fr-FR')})`
+                : `Sauvegarde ancienne (${days} j)`;
+  } else {
+    color='var(--mint)'; bg='#0d3327';
+    txt = `✓ Sauvegardé ${last.toLocaleDateString('fr-FR')}`;
+  }
+  el.style.color=color; el.style.background=bg; el.style.borderColor=color; el.textContent=txt;
+}
+// manageState : même périmètre que l'export/import d'état existant (superadmin, directeur, qualite)
+function canManageState(){ return currentRole && !!PERM[currentRole].manageState; }
 
 
 /* ============================= MOTEUR DE CALCUL ============================= */
@@ -4049,6 +4245,135 @@ function renderPayroll(){
   });
 }
 
+/* ============================= GRAPHIQUES STRATÉGIQUES (Chart.js, T0+ 2026-07-17) =============================
+   Principe : les graphiques ne RECALCULENT AUCUNE donnée métier. Ils reçoivent les agrégats déjà produits
+   par le moteur (renderFinanceSummary, renderKPI) et se contentent de les dessiner. Si Chart.js n'a pas pu
+   charger (CDN injoignable → window.__chartFailed), les zones graphiques restent masquées et les tableaux
+   font foi (dégradation gracieuse, aucune fonctionnalité perdue). */
+const CHART_C = { mint:'#3fd6a4', amber:'#e8a83f', red:'#e8556f', blue:'#5b9bf2',
+                  ink:'#e7edf7', inkDim:'#8ea0bd', grid:'rgba(120,140,175,.12)' };
+const _charts = {}; // instances Chart vivantes — détruites avant recréation (comme Tabulator)
+
+function chartReady(){ return typeof Chart !== 'undefined' && !window.__chartFailed; }
+
+function applyChartDefaults(){
+  if(!chartReady() || window.__chartDefaultsSet) return;
+  Chart.defaults.color = CHART_C.inkDim;
+  Chart.defaults.font.family = "'Inter','Segoe UI',system-ui,sans-serif";
+  Chart.defaults.font.size = 11.5;
+  Chart.defaults.animation = false; // outil de gestion : rendu instantané, pas d'animation à chaque re-render
+  Chart.defaults.plugins.legend.labels.usePointStyle = true;
+  Chart.defaults.plugins.legend.labels.boxWidth = 8;
+  Chart.defaults.plugins.legend.labels.padding = 12;
+  window.__chartDefaultsSet = true;
+}
+
+function upsertChart(canvasId, config){
+  if(!chartReady()) return null;
+  const canvas = document.getElementById(canvasId);
+  if(!canvas) return null;
+  applyChartDefaults();
+  if(_charts[canvasId]){ _charts[canvasId].destroy(); }
+  _charts[canvasId] = new Chart(canvas.getContext('2d'), config);
+  return _charts[canvasId];
+}
+
+const dhTooltip = { callbacks:{ label:ctx=>{
+  const v = ctx.parsed.y ?? ctx.parsed.x ?? ctx.parsed;
+  const lbl = ctx.dataset.label ? ctx.dataset.label+' : ' : (ctx.label ? ctx.label+' : ' : '');
+  return lbl + (typeof v==='number' ? v.toLocaleString('fr-FR')+' DH' : v);
+}}};
+
+// Graphiques Trésorerie : reçoit l'objet d'agrégats déjà calculé par renderFinanceSummary
+function renderFinanceCharts(a){
+  const zone = document.getElementById('finance-charts');
+  if(!zone) return;
+  if(!chartReady()){ zone.style.display='none'; return; }
+  zone.style.display = '';
+
+  // 1) Barres empilées Payé vs Restant dû, par catégorie
+  upsertChart('chartFinanceStack', {
+    type:'bar',
+    data:{
+      labels:['Brut MINT','Activation','ConsoPilote'],
+      datasets:[
+        { label:'Payé', data:[a.brutPaye, a.activPaye, a.consoPaye], backgroundColor:CHART_C.mint, borderRadius:5, stack:'s' },
+        { label:'Restant dû', data:[a.brutDu, a.activDu, a.consoDu], backgroundColor:CHART_C.amber, borderRadius:5, stack:'s' }
+      ]
+    },
+    options:{ responsive:true, maintainAspectRatio:false,
+      scales:{ x:{ stacked:true, grid:{display:false} },
+               y:{ stacked:true, grid:{color:CHART_C.grid}, ticks:{callback:v=>v.toLocaleString('fr-FR')} } },
+      plugins:{ legend:{position:'bottom'}, tooltip:dhTooltip } }
+  });
+
+  // 2) Anneau : répartition du reste à payer (cash uniquement)
+  const dueVals = [a.brutDu, a.activDu, a.consoDu];
+  const dueTotal = dueVals.reduce((s,v)=>s+v,0);
+  upsertChart('chartFinanceDonut', {
+    type:'doughnut',
+    data:{
+      labels:['Brut MINT', 'Activation', 'ConsoPilote'],
+      datasets:[{ data:dueVals, backgroundColor:[CHART_C.blue, CHART_C.amber, CHART_C.mint], borderColor:'#0e1830', borderWidth:2 }]
+    },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
+      plugins:{ legend:{position:'bottom'}, tooltip:dhTooltip,
+        title:{ display:true, text: dueTotal>0 ? (dueTotal.toLocaleString('fr-FR')+' DH à décaisser') : 'Tout est réglé ✓',
+                 color:CHART_C.ink, font:{size:13, weight:'700'} } } }
+  });
+}
+
+// Graphiques KPI : reçoit le tableau `data` par agent déjà construit par renderKPI
+function renderKPICharts(rows){
+  const zone = document.getElementById('kpi-charts');
+  if(!zone) return;
+  if(!chartReady() || !rows.length){ zone.style.display='none'; return; }
+  zone.style.display = '';
+
+  // 1) Top agents par Net (barres horizontales, max 10)
+  const top = rows.slice().sort((x,y)=>y.Net_Total-x.Net_Total).slice(0,10);
+  upsertChart('chartKpiNet', {
+    type:'bar',
+    data:{ labels: top.map(a=>a.Agent),
+      datasets:[{ label:'Net généré', data: top.map(a=>a.Net_Total),
+        backgroundColor: top.map(a=> a.Net_Total>=0 ? CHART_C.mint : CHART_C.red), borderRadius:5 }] },
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      scales:{ x:{ grid:{color:CHART_C.grid}, ticks:{callback:v=>v.toLocaleString('fr-FR')} },
+               y:{ grid:{display:false} } },
+      plugins:{ legend:{display:false}, tooltip:dhTooltip } }
+  });
+
+  // 2) Causes de chute (anneau) — somme des motifs sur tous les agents
+  const chutes = rows.reduce((acc,a)=>{ acc.an+=a.Annulees; acc.re+=a.Retractees; acc.rs+=a.Resiliees; acc.rf+=a.Refusees; return acc; },
+                             {an:0,re:0,rs:0,rf:0});
+  const chuteTotal = chutes.an+chutes.re+chutes.rs+chutes.rf;
+  upsertChart('chartKpiChutes', {
+    type:'doughnut',
+    data:{ labels:['Annulées','Rétractées','Résiliées','Refusées'],
+      datasets:[{ data:[chutes.an,chutes.re,chutes.rs,chutes.rf],
+        backgroundColor:[CHART_C.red,'#c0455f','#e8a83f','#a06be8'], borderColor:'#0e1830', borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'60%',
+      plugins:{ legend:{position:'bottom'}, tooltip:{callbacks:{label:ctx=>ctx.label+' : '+ctx.parsed+' contrat(s)'}},
+        title:{ display:true, text: chuteTotal>0 ? (chuteTotal+' chute(s)') : 'Aucune chute ✓',
+                color:CHART_C.ink, font:{size:13, weight:'700'} } } }
+  });
+
+  // 3) Taux d'activation MINT global (anneau 2 parts)
+  const totMint = rows.reduce((s,a)=>s+a.Ventes_MINT,0);
+  const activ = rows.reduce((s,a)=>s+a.Activees,0);
+  const nonActiv = Math.max(0, totMint - activ);
+  const taux = totMint>0 ? Math.round(100*activ/totMint) : 0;
+  upsertChart('chartKpiActivation', {
+    type:'doughnut',
+    data:{ labels:['Activées','Non activées'],
+      datasets:[{ data:[activ, nonActiv], backgroundColor:[CHART_C.mint, CHART_C.inkDim], borderColor:'#0e1830', borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'68%',
+      plugins:{ legend:{position:'bottom'}, tooltip:{callbacks:{label:ctx=>ctx.label+' : '+ctx.parsed+' vente(s)'}},
+        title:{ display:true, text: totMint>0 ? (taux+'% activées') : 'Aucune vente MINT',
+                color:CHART_C.ink, font:{size:15, weight:'700'} } } }
+  });
+}
+
 function renderFinanceSummary(){
   const box = document.getElementById('finance-summary');
   let brutDu=0, brutPaye=0, activDu=0, activPaye=0, consoDu=0, consoPaye=0, decom=0, avances=0;
@@ -4125,6 +4450,8 @@ function renderFinanceSummary(){
     <div class="stat-card red"><div class="label">Décommissionné (clawback)</div><div class="value">${decom} DH</div></div>
     <div class="stat-card ${panierN>0?'amber':'blue'}" title="Ventes sans agent identifiable dans le fichier source, affectées au compte système « Panier Entreprise » — rémunération calculée normalement (déjà incluse dans les totaux ci-dessus), isolée ici en attente de réattribution manuelle à un agent réel."><div class="label">🧺 Panier Entreprise (agent inconnu)</div><div class="value">${panierNet} DH · ${panierN} ct</div></div>
   `;
+  // graphiques : mêmes chiffres que les cartes ci-dessus, aucun recalcul métier
+  renderFinanceCharts({ brutPaye, brutDu, activPaye, activDu, consoPaye, consoDu });
 }
 
 // Catégorise le statut CRM d'une vente MINT en motif de chute qualité (indépendant du
@@ -4171,6 +4498,8 @@ function renderKPI(){
     Taux_Chute: a.Ventes_MINT ? Math.round(100*a.Chutes/a.Ventes_MINT)+'%' : '—',
     Taux_Decommission: a.Ventes_MINT ? Math.round(100*a.Decommissionnees/a.Ventes_MINT)+'%' : '—'
   })).sort((a,b)=>b.Net_Total-a.Net_Total);
+
+  renderKPICharts(data); // mêmes agrégats par agent, affichés en graphiques
 
   createOrUpdateTabulator('tKPI', "#table-kpi", data, {
     layout:"fitDataStretch", height:"420px", placeholder:"Aucune donnée.",
@@ -4868,6 +5197,20 @@ document.getElementById('stateInput').addEventListener('change', e=>{
     }catch(err){ showError('Fichier d\'état invalide : '+err.message); }
   };
   reader.readAsText(file);
+});
+
+// --- Sauvegarde complète (S1) ---
+document.getElementById('fullBackupBtn').addEventListener('click', exportFullBackup);
+document.getElementById('fullRestoreInput').addEventListener('change', e=>{
+  const file = e.target.files[0];
+  if(file) importFullBackup(file);
+  e.target.value = ''; // permet de re-sélectionner le même fichier
+});
+// Avertissement à la fermeture si des modifications n'ont pas été mises à l'abri
+window.addEventListener('beforeunload', e=>{
+  if(canManageState() && localStorage.getItem('sipp.dirtySinceBackup')==='true'){
+    e.preventDefault(); e.returnValue = '';
+  }
 });
 
 /* ============================= EXPORT TRÉSORERIE XLSX ============================= */
