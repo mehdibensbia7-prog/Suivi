@@ -51,6 +51,23 @@ L'application doit également protéger les règles métier sensibles autour des
 
 ## Journal des Correctifs
 
+- **2026-07-17** — Catégorisation stricte des contrats + compte système « Panier Entreprise » (décision Direction) :
+  - **Règle** (vérifiée sur l'ensemble des données réelles du projet, zéro exception trouvée) : un n° de contrat MINT commence toujours par « 18 » (7 chiffres, ex. 1811957) ; ConsoPilote commence toujours par « 2 » (6 chiffres, ex. 223453). Nouveau `classifyContractRef()`.
+  - **Décisions Direction actées** : (1) une inversion détectée (numéro saisi dans la mauvaise colonne du fichier source) est **corrigée automatiquement et silencieusement** à l'import, avant tout calcul de rémunération — tracée dans `contractSwaps` pour audit a posteriori, jamais de validation manuelle requise ; (2) un numéro qui ne correspond à AUCUN des deux formats n'est **jamais reclassé par supposition** (impact financier non maîtrisé) — reste dans sa colonne d'origine, signalé dans `contractAnomalies` (cas réel constaté : « 7917962/166641 », ligne NDIAYE) ; (3) une vente à agent inconnu est désormais affectée au compte système **« Panier Entreprise »** (`AGENT_INCONNU`), rémunéré selon les mêmes règles qu'un agent normal (pas un simple texte d'affichage) — traverse automatiquement tout le pipeline existant (KPI, Trésorerie, Caisse, Mes Ventes) puisque c'est une valeur d'agent comme une autre ; protégé du dédoublonnage par similarité (`harmoniseAgentNames()`) pour ne jamais être fusionné avec un autre nom.
+  - **Portée volontairement limitée** : la règle de classification ne s'applique qu'au point où MINT et ConsoPilote coexistent naturellement sur une même ligne (les deux colonnes de Feuil1) — ni le fallback ConsoPilote « Feuil2 seule » (2026-07-16) ni les ventes du nouveau format Feuil2 sans n° de contrat (2026-07-16/17, hors moteur de commissionnement) n'ont été étendus ; aucune donnée réelle ne montrait de besoin ailleurs.
+  - **Interface** : bouton « 🧹 Contrats corrigés » (Super Admin/Directeur uniquement, même périmètre que Caisse) ouvrant un rapport des inversions/anomalies du dernier import ; carte « 🧺 Panier Entreprise » dans le résumé Trésorerie (CA isolé, déjà inclus dans tous les totaux) ; diagnostics automatiques après import listant chaque correction/anomalie par contrat et client.
+  - **Tests** : `classifyContractRef`/`AGENT_INCONNU` copiés verbatim dans `tests.js` (sections S13 : 14 assertions de classification pure incl. le cas réel malformé ; S14 : 6 assertions, réplique de la décision d'inversion). **Suite complète S1-S14 exécutée dans un vrai Chrome via un serveur HTTP local (`Suivi/serve.ps1` + `.claude/launch.json`, contourne l'absence de Node/Python dans l'environnement de dev) : 117/117 PASS.** Import réel d'un fichier de production (106 lignes) confirmé sans régression (2 anomalies réelles détectées, 0 fausse inversion) ; les deux sens d'inversion et l'affectation Panier Entreprise prouvés en appelant directement `buildLignes()` avec des données synthétiques dans le vrai moteur JS de la page.
+  - Fichiers modifiés : `index.html` — `classifyContractRef()`/`MINT_CONTRACT_RE`/`CONSO_CONTRACT_RE`/`AGENT_INCONNU`, `buildLignes()` (helpers `mergeIntoMintGroups`/`mergeIntoConsoGroups` factorisés, détection/redirection par contrat), garde `AGENT_INCONNU` dans `harmoniseAgentNames()`, bouton + modale « Contrats corrigés », carte Panier Entreprise (`renderFinanceSummary`), `escapeHtml()` (nouveau, utilisé pour cette modale qui affiche des données importées) ; `tests.js` — sections S13/S14.
+
+- **2026-07-17** — Identification ConsoPilote élargie : contrats Feuil1-seuls, colonne Agent directe, recoupement d'identité sur format classique :
+  - **Cas réel ZENDA/KOLANI (contrat 236103)** : un contrat ConsoPilote référencé dans Feuil1 mais absent de TOUTES les feuilles ConsoPilote importées était invisible dans l'onglet Identification (qui prétendait pourtant afficher 100% des ventes), alors que le moteur de commissionnement le paie correctement depuis toujours (Feuil1 exige une date de vente pour toute ligne traitée, donc toute entrée `consoGroups` issue de Feuil1 a nécessairement une date réelle). Corrigé : nouvelle étape « 2ter » dans `buildConsoIdentification()` qui parcourt aussi les contrats connus de Feuil1 seule (verdict « Source unique Feuil1 »).
+  - **Nouvelle colonne « Agent » directe** constatée dans un export plus récent du format sans n° de contrat (Date/Nom/Contact/Signature/SEPA/Agent, valeur « Inconnu » = non renseigné par la source) : lue et confrontée au recoupement d'identité existant (téléphone/nom vs Feuil1) — l'agent n'est plus jamais masqué dès qu'une source, quelle qu'elle soit, le fournit.
+  - **Recoupement d'identité étendu** aux contrats du format CLASSIQUE (avec n° de contrat) absents de Feuil1 par numéro : tentative de retrouver l'agent par téléphone/nom avant de conclure « Non recoupé ».
+  - **Déduplication** : une ligne du nouveau format désignant un client strictement identique (nom normalisé) à une ligne classique est ignorée (même vente, deux exports) ; référence affichée = le vrai n° ConsoPilote quand il est retrouvé, pas le n° d'énergie.
+  - **Correctif d'affichage** : en cas de conflit entre sources, la colonne « Agent retenu » affiche désormais l'agent RÉELLEMENT commissionné par le moteur (pas l'autre déclaration) — c'était auparavant incohérent avec ce qui est effectivement payé.
+  - **Tests** : sections S11 (8 assertions, cas Feuil1-seul + recoupement identité + conflits) et S12 (7 assertions, colonne Agent directe) ajoutées à `tests.js`.
+  - Fichiers modifiés : `index.html` — `buildConsoIdentification()` (étape 2ter, `findF1ByIdentity()`, lecture colonne Agent, dédup nouveau/classique) ; `tests.js` — sections S11/S12.
+
 - **2026-07-16** — Identification ConsoPilote par nom/téléphone (nouveau format Feuil2 sans n° de contrat) + clarifications Direction :
   - **Constat** : un 3ᵉ export ConsoPilote (`tableau statut brut (5).xlsx`) est arrivé dans une structure totalement différente des deux précédentes (`Date/Nom/Contact/Signature/SEPA` — ni numéro de contrat, ni colonne agent). L'audit par n° de contrat (`buildConsoIdentification` existant) est structurellement inutilisable sur ce format : il n'y a rien à recouper.
   - **Nouvelle cascade de rapprochement à 3 niveaux** pour ce format (`type:'feuil2alt'`, détecté par `findFeuil2AltHeaderIndex`) : (1) téléphone extrait de la colonne « Contact » (email+tel concaténés, `extractPhoneDigits` — 9 derniers chiffres) comparé aux téléphones Feuil1 ; (2) nom exact/approché (Levenshtein, seuil strict ≥90%, plus strict que les 80% de `harmoniseAgentNames()` car une erreur ici a un impact financier direct) contre les clients Feuil1 ; (3) à défaut, nom exact/approché contre l'ancienne Feuil2 (avec colonne agent) chargée dans le même import — validé sur données réelles : les 25 clients Feuil2 « ancien format » sont TOUS présents dans le nouveau format, donc ce 3ᵉ niveau seul suffit à identifier 100% des ventes quand Feuil1 ne suffit pas. Chaque niveau produit une fiabilité/commentaire distincts, affichés dans l'onglet Identification ConsoPilote (correspondances approchées explicitement marquées « à valider manuellement »).
@@ -210,11 +227,13 @@ L'application doit également protéger les règles métier sensibles autour des
 
 ## DOCUMENT DE RÉFÉRENCE : SIPP (Système d'Information de Pilotage de Performance)
 
+> **⚠️ Ce document est un texte D'ORIGINE conservé pour l'historique du projet — plusieurs règles financières qu'il décrit ont été REMPLACÉES depuis par des décisions Direction explicites (voir § Journal des Correctifs ci-dessus, qui est la SEULE source de vérité pour les règles actuelles). Les passages obsolètes sont annotés ci-dessous plutôt que supprimés, pour ne pas perdre la trace de l'évolution du projet — mais ne jamais les ré-implémenter tels quels : suivre exclusivement `computeMintClawback()` / `computeConsoFields()` dans `index.html` et leur documentation dans le Journal des Correctifs.**
+
 ### Phase 1 : Historique des demandes (Consolidation des textes)
 - Objectif : Structurer une entité de centre d'appel avec organigramme et framework RH.
 - Logique MINT : Détection des contrats via regex, calcul du brut (50 DH/unité) et net (150 DH/activation).
-- Logic ConsoPilote : Paiements différés (100 DH à la signature, 50 DH à M+1, 50 DH à M+2).
-- Compliance (Clawback) : Décommissionnement automatique (-150 DH) si statut devient "Annulé, Rétracté, Résilié, Refusé".
+- Logic ConsoPilote : Paiements différés (100 DH à la signature, 50 DH à M+1, 50 DH à M+2). **[⚠️ OBSOLÈTE — remplacé le 2026-07-15 (§ Journal des Correctifs) : total 100 DH en 2 tranches de 50 DH, conditionnées statut « Signé » ET prélèvement « actif », exigibles à J+45 et aux 2 mois clos — PAS un versement à la signature. Voir `computeConsoFields()`.]**
+- Compliance (Clawback) : Décommissionnement automatique (-150 DH) si statut devient "Annulé, Rétracté, Résilié, Refusé". **[⚠️ OBSOLÈTE — remplacé le 2026-07-16 (§ Journal des Correctifs, règle authentifiée Direction) : le Brut (50 DH) est TOUJOURS dû, jamais repris automatiquement par l'algorithme — seule une décision Qualité explicite peut l'annuler. Seule l'Activation (150 DH) est décommissionnée automatiquement, et uniquement si la chute survient dans la fenêtre de 3 mois. Voir `computeMintClawback()`.]**
 - Gestion Opérationnelle : Création de colonnes de statuts éditables dans l'onglet Opérationnel.
 - Trésorerie & Management : Validation unitaire des paiements (MINT/Conso) et dashboard de balance financière.
 - KPI : Analyse de performance et taux de chute par agent.
@@ -224,7 +243,7 @@ L'application doit également protéger les règles métier sensibles autour des
 #### 1. Modules Fonctionnels
 - Import & Lecture : Interface d'importation `.xlsx` avec sélecteur de feuilles.
 - Tableau Opérationnel : Affichage des données sources avec ajout de deux colonnes de statuts éditables (Énergie / Conso).
-- Calculateur Financier :
+- Calculateur Financier : **[⚠️ OBSOLÈTE — les deux formules ci-dessous ne reflètent plus les règles actuelles, voir annotations Phase 1 ci-dessus + § Journal des Correctifs]**
   - MINT : (Nb_Unités × 50) + (Activation × 150) - (Clawback × 150).
   - CONSO : 100 + (M+1 × 50) + (M+2 × 50) (ajusté par date).
 - Module KPI : Synthèse des ventes et des annulations par agent.
@@ -250,6 +269,6 @@ Chaque intervention future doit respecter strictement ce protocole :
   - `XLSX.js` pour la lecture Excel.
   - `Date` natif / helpers de date pour la gestion des échéances (M+1, M+2).
   - `Tabulator.js` pour la manipulation des tableaux, le tri et l'édition granulaire.
-- Dashboard : Mise à jour via la fonction `updateBalance()` déclenchée à chaque modification de statut de paiement par le manager.
+- Dashboard : Mise à jour via la fonction `updateBalance()` déclenchée à chaque modification de statut de paiement par le manager. **[⚠️ OBSOLÈTE/INEXACT — cette fonction n'existe pas dans le code actuel ; le rendu financier passe par `renderFinanceSummary()`/`renderFinance()`, appelées depuis `renderAll()`.]**
 
 > Note de mise en œuvre : Pour toute demande de modification, utilisez le protocole d'exécution ci-dessus afin de garantir que les modules KPI, Sélecteur de feuilles, et la logique de décommissionnement restent en place.
