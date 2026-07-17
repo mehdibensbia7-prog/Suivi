@@ -1969,29 +1969,73 @@ async function reconcileCaisseDebits(state){
        de la Trésorerie + action groupée du Calendrier) : le brut ne peut pas à la fois solder la dette ET
        être versé à l'agent ;
      - chaque affectation est journalisée dans le rapport « Transactions automatiques » de l'onglet Caisse.
-   Modèle 100% DÉRIVÉ (fonction pure de caisseCache.avances + rawLignes), recalculé à chaque rendu : aucun
-   ledger figé n'est écrit, donc aucune incohérence possible (pas de double comptage, mise à jour immédiate
-   si un statut/brut change). L'avance stockée `avances[agent]` reste la dette d'origine auditable ;
-   « Compensé » et « Dette restante » en sont dérivés. Le SOLDE DE CAISSE n'est pas affecté : une
-   compensation n'est pas un mouvement de trésorerie (aucun cash n'entre ni ne sort — un brut bloqué n'est
-   tout simplement jamais débité via debitCaisseMint). */
+   La compensation EN ATTENTE (bruts non payés, affectés mais pas encore actés) reste 100% DÉRIVÉE de
+   caisseCache.avances + rawLignes, recalculée à chaque rendu — aucun ledger figé, aucune incohérence
+   possible. Le SOLDE DE CAISSE n'est pas affecté par une compensation (aucun cash n'entre ni ne sort).
+
+   Le remboursement FERME (brut déjà payé + flag source « Dette à rembourser », règle Direction 2026-07-17)
+   est en revanche PERSISTÉ (voir reconcileDetteFermes ci-dessous), PAS recalculé depuis le flag à chaque
+   rendu : le flag source s'est révélé TRANSITOIRE (la Direction l'efface une fois traité — confirmé sur des
+   exports successifs où 17 lignes marquées passent à 3 marquées le lendemain, mêmes contrats). Si le
+   remboursement restait purement dérivé du flag, réimporter un export plus récent où le flag a disparu
+   ferait réapparaître une dette pourtant déjà remboursée — bug corrigé le 2026-07-17 (voir project memory). */
 let caisseCache = null;        // dernier état caisse chargé, exposé de façon synchrone au rendu Trésorerie
 let compensationMap = {};      // { lineId: {applied, agent} } — bruts affectés à une dette (bloqués au cash)
 let compensationByAgent = {};  // { agent: {dette, compensation, detteRestante, contrats:[...]} }
+
+// Rembourse DÉFINITIVEMENT l'avance d'un agent pour chaque brut MINT payé portant le flag source
+// « Dette à rembourser » pas encore traité (idempotent : ignore les lignes déjà dans state.compensations).
+// Équivalent d'un « Acter » automatique, déclenché par la donnée importée plutôt que par un clic — voir
+// acterCompensation pour le mécanisme manuel jumeau. Chronologique par agent, capé sur l'avance restante.
+async function reconcileDetteFermes(state){
+  let changed = false;
+  const nowIso = new Date().toISOString();
+  const byAgent = {};
+  rawLignes.forEach(l=>{
+    if(l.type!=='MINT' || !(l.brut>0) || l.brutAnnule || l.tempPerdue) return;
+    if(l.statutPaiementBrut!=='Payé' || !l.detteARembourser) return;
+    if(state.compensations.some(c=>c.lineId===l.id)) return; // déjà appliqué (import précédent ou re-scan)
+    (byAgent[l.agent] = byAgent[l.agent] || []).push(l);
+  });
+  Object.keys(byAgent).sort().forEach(agent=>{
+    byAgent[agent]
+      .sort((a,b)=>((+toDateSafe(a.dateVente))||0)-((+toDateSafe(b.dateVente))||0))
+      .forEach(l=>{
+        const avance = state.avances[agent]||0;
+        if(avance<=0) return; // rien à rembourser pour l'instant — retenté à un prochain rendu si une avance est ajoutée
+        const applied = Math.min(l.brut, avance);
+        const nouveau = Math.max(0, avance - applied);
+        if(nouveau<=0) delete state.avances[agent]; else state.avances[agent] = nouveau;
+        state.compensations.push({ date:nowIso, agent, lineId:l.id, contrat:l.contrat, montant:applied, ferme:true,
+          dateVenteStr:l.dateVenteStr, echeanceStr:l.vendrediPaiementStr||l.dateVenteStr, detteApres:nouveau });
+        state.avanceHistorique.push({ date:nowIso, agent, ancien:avance, nouveau,
+          motif:`Remboursement automatique (contrat ${l.contrat}, source « Dette à rembourser »)` });
+        changed = true;
+      });
+  });
+  if(changed) await saveCaisseState(state);
+  return state;
+}
 
 function computeAvanceCompensation(){
   compensationMap = {};
   compensationByAgent = {};
   const avances = (caisseCache && caisseCache.avances) ? caisseCache.avances : {};
+  const permCompensations = (caisseCache && caisseCache.compensations) ? caisseCache.compensations : [];
   // bruts MINT ENCORE DUS (non payés cash, non annulés qualité, non temporairement perdus), regroupés par agent
   const parAgent = {};
   rawLignes.forEach(l=>{
     if(l.type!=='MINT' || !(l.brut>0) || l.brutAnnule || l.tempPerdue || l.statutPaiementBrut==='Payé') return;
     (parAgent[l.agent] = parAgent[l.agent] || []).push(l);
   });
-  Object.keys(avances).forEach(agent=>{
-    const dette = avances[agent] || 0;
-    if(dette<=0) return;
+  // Un agent dont l'avance vient de retomber PILE à 0 (entièrement remboursée par des fermes — cas réel :
+  // Amine Jennane, 300 DH d'avance soldée par 6×50 DH de fermes) doit RESTER visible dans les écrans Caisse
+  // avec « 0 DH restant, 300 DH remboursé » — sans ce filet, il disparaîtrait purement et simplement des
+  // tableaux dès que son solde atteint zéro, perdant tout l'historique de remboursement à l'écran.
+  const fermeAgents = new Set(permCompensations.filter(c=>c.ferme).map(c=>c.agent));
+  const agents = new Set([...Object.keys(avances), ...fermeAgents]);
+  agents.forEach(agent=>{
+    const dette = avances[agent] || 0; // déjà net de tout remboursement ferme (persisté par reconcileDetteFermes)
     const lignes = (parAgent[agent]||[]).slice()
       .sort((a,b)=>((+toDateSafe(a.dateVente))||0)-((+toDateSafe(b.dateVente))||0)); // chronologique : les plus anciennes ventes remboursent en premier
     let remaining = dette;
@@ -2003,7 +2047,20 @@ function computeAvanceCompensation(){
       compensationMap[l.id] = { applied, agent };
       contrats.push({ lineId:l.id, contrat:l.contrat, dateVenteStr:l.dateVenteStr, echeanceStr:l.vendrediPaiementStr||l.dateVenteStr, montant:applied, detteApres:remaining });
     });
-    compensationByAgent[agent] = { dette, compensation:dette-remaining, detteRestante:remaining, contrats };
+    // historique des remboursements FERMES déjà appliqués/persistés (reconcileDetteFermes) — affiché pour
+    // audit (« Remboursé par bruts (auto) »), n'affecte plus `dette` ici : déjà net dans avances[agent].
+    const fermes = permCompensations.filter(c=>c.ferme && c.agent===agent);
+    const rembourseFerme = fermes.reduce((s,c)=>s+c.montant,0);
+    const contratsFermes = fermes.map(c=>({ lineId:c.lineId, contrat:c.contrat, dateVenteStr:c.dateVenteStr, echeanceStr:c.echeanceStr, montant:c.montant, detteApres:c.detteApres }));
+    if(dette<=0 && rembourseFerme<=0) return; // ni dette ni historique : rien à afficher pour cet agent
+    compensationByAgent[agent] = {
+      dette,
+      rembourseFerme,                 // total historique remboursé (ferme, persisté)
+      avanceEffective: dette,         // alias de compat : dette est déjà l'avance effective (nette de ferme)
+      compensation: dette - remaining,// en attente d'être acté
+      detteRestante: remaining,       // reste à couvrir par de futures ventes
+      contrats, contratsFermes
+    };
   });
 }
 // Un brut affecté (même partiellement) à une dette est bloqué au paiement cash.
@@ -2012,9 +2069,14 @@ function isBrutBlockedByAvance(id){ return !!(compensationMap[id] && compensatio
 // Sert à corriger les projections de CASH (audit D4) : cette part sera consommée par « Acter »,
 // jamais décaissée — la compter dans « à payer » surestimerait le cash à préparer.
 function brutAffecteAvance(l){ const c = compensationMap[l.id]; return c ? c.applied : 0; }
-// Recharge l'état caisse en cache synchrone puis recalcule la compensation (avances ↔ bruts).
+// Recharge l'état caisse en cache synchrone, applique les remboursements fermes en attente, puis
+// recalcule la compensation (avances ↔ bruts). Appelé après chaque import — c'est le point d'entrée qui
+// garantit qu'un remboursement ferme est persisté avant même que l'utilisateur ouvre l'onglet Caisse.
 async function refreshCaisseCache(){
-  try{ caisseCache = await loadCaisseState(); }
+  try{
+    caisseCache = await loadCaisseState();
+    caisseCache = await reconcileDetteFermes(caisseCache);
+  }
   catch(e){ console.warn('refreshCaisseCache', e); caisseCache = caisseCache || defaultCaisseState(); }
   computeAvanceCompensation();
 }
@@ -2052,8 +2114,11 @@ async function acterCompensation(agent){
     return;
   }
   const total = full.reduce((s,c)=>s+c.montant,0);
-  const reliquat = info.dette - total;
-  if(!confirm(`Acter la compensation de ${agent} ?\n\n• ${full.length} contrat(s) MINT × Brut = ${total} DH seront marqués « Payé (compensation avance) » — verrouillés, AUCUNE sortie de caisse.\n• Dette réduite : ${info.dette} DH → ${reliquat} DH${reliquat<=0 ? ' (avance entièrement soldée)' : ' (reliquat conservé en avance)'}\n\nCette opération est définitive (réversion uniquement via l'onglet Qualité).`)) return;
+  // Affiche l'avance EFFECTIVE (dette − remboursements fermes déjà réalisés) pour coller à ce que voit
+  // l'utilisateur dans « Avance en cours » ; la réduction du registre stocké reste ancien − total.
+  const avEff = (info.avanceEffective!=null ? info.avanceEffective : info.dette);
+  const reliquat = Math.max(0, avEff - total);
+  if(!confirm(`Acter la compensation de ${agent} ?\n\n• ${full.length} contrat(s) MINT × Brut = ${total} DH seront marqués « Payé (compensation avance) » — verrouillés, AUCUNE sortie de caisse.\n• Avance en cours : ${avEff} DH → ${reliquat} DH${reliquat<=0 ? ' (avance entièrement soldée)' : ' (reliquat conservé en avance)'}\n\nCette opération est définitive (réversion uniquement via l'onglet Qualité).`)) return;
   const state = await loadCaisseState();
   const nowIso = new Date().toISOString();
   full.forEach(c=>{
@@ -2087,6 +2152,7 @@ async function renderCaisse(){
 
   let state = await loadCaisseState();
   state = await reconcileCaisseDebits(state);
+  state = await reconcileDetteFermes(state);
   // synchronise le cache + recalcule la compensation avance ↔ brut sur l'état fraîchement lu
   caisseCache = state;
   computeAvanceCompensation();
@@ -2094,8 +2160,11 @@ async function renderCaisse(){
   const totalAvances = Object.values(state.avances).reduce((s,v)=>s+v,0);
   const totalDebitsMint = state.mintDebits.reduce((s,d)=>s+d.montant,0);
   // agrégats de compensation (dérivés) : combien des avances est déjà couvert par des bruts affectés,
-  // et combien de dette reste à couvrir par de futures ventes.
-  const totalCompense = Object.values(compensationByAgent).reduce((s,a)=>s+a.compensation,0);
+  // et combien de dette reste à couvrir par de futures ventes. « Remboursé » agrège les DEUX formes :
+  // ferme (brut payé + flag « Dette à rembourser », définitif, aucune action requise) et en attente
+  // (brut non payé affecté à la dette, définitif seulement après clic « Acter ») — sinon la carte
+  // sous-compte les remboursements fermes, qui sont pourtant déjà acquis.
+  const totalCompense = Object.values(compensationByAgent).reduce((s,a)=>s+a.compensation+a.rembourseFerme,0);
   const totalDetteRestante = Object.values(compensationByAgent).reduce((s,a)=>s+a.detteRestante,0);
 
   box.innerHTML = `
@@ -2136,14 +2205,27 @@ async function renderCaisse(){
   selAvance.innerHTML = '<option value="">Sélectionner un agent…</option>' + agentsDistincts.map(a=>`<option value="${a}">${a}</option>`).join('');
   if(curSel) selAvance.value = curSel;
 
-  const avancesData = Object.entries(state.avances).filter(([,v])=>v!==0).map(([agent,montant])=>({agent, montant}));
+  // « Avance en cours » = avance stockée (déjà nette de tout remboursement ferme — persisté par
+  // reconcileDetteFermes, règle Direction 2026-07-17). Le badge « Avance initiale » reconstruit le montant
+  // AVANT ferme (montant + ferme) uniquement pour l'affichage — le stockage lui-même ne garde que le net.
+  const avancesData = Object.entries(state.avances).filter(([,v])=>v!==0).map(([agent,montant])=>{
+    const comp = compensationByAgent[agent];
+    const ferme = comp ? comp.rembourseFerme : 0;
+    return { agent, montant, rembourseFerme: ferme, avanceInitiale: montant + ferme };
+  });
   createOrUpdateTabulator('tCaisseAvances', '#table-caisse-avances', avancesData, {
     layout:'fitDataStretch', height: avancesData.length?Math.min(80+avancesData.length*36,300)+'px':'80px',
     placeholder:'Aucune avance active.',
     columns:[
       {title:'Agent', field:'agent', widthGrow:2},
       {title:'Avance en cours (DH)', field:'montant', hozAlign:'right', width:160,
-        formatter:c=>`<b style="color:var(--amber)">${c.getValue()} DH</b>`},
+        formatter:c=>{
+          const r = c.getRow().getData();
+          const base = `<b style="color:var(--amber)">${c.getValue()} DH</b>`;
+          return r.rembourseFerme>0
+            ? base + ` <span class="tag ok" title="Avance initiale ${r.avanceInitiale} DH − ${r.rembourseFerme} DH déjà remboursés par des bruts payés marqués « Dette à rembourser » (compensation, aucune sortie de caisse).">−${r.rembourseFerme} remb.</span>`
+            : base;
+        }},
       {title:'', field:'_actions', width:230, formatter:cell=>{
           const agent = cell.getRow().getData().agent;
           const comp = compensationByAgent[agent];
@@ -2174,13 +2256,20 @@ async function renderCaisse(){
     ]
   });
 
-  // ---- Transactions automatiques : bruts affectés (dérivé, en cours) + compensations ACTÉES (registre permanent) ----
+  // ---- Transactions automatiques : bruts affectés (dérivé, en cours) + compensations PERSISTÉES (registre) ----
   const autoTx = [];
-  // 1. registre permanent : compensations actées (les bruts sont « Payé — compensation », la dette a été réduite)
+  // 1. registre permanent (state.compensations) : deux origines distinguées par `cp.ferme` —
+  //    - manuel : bouton « Acter » cliqué sur une compensation en attente → Etat 'Actée ✓'
+  //    - ferme : brut payé + flag source « Dette à rembourser », appliqué automatiquement par
+  //      reconcileDetteFermes (aucune action requise) → Etat 'Remboursé (payé) ✓', règle Direction 2026-07-17.
+  //    Les entrées ferme portent aussi date de vente / échéance / dette-après (absentes pour les actées
+  //    manuelles historiques, sans impact — `|| '—'` couvre l'ancien format).
   (state.compensations||[]).slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).forEach(cp=>{
     autoTx.push({
-      Date: fmtDate(new Date(cp.date)), Agent:cp.agent, Contrat:cp.contrat, DateVente:'—', Echeance:'—',
-      Montant:cp.montant, DetteApres:null, Etat:'Actée ✓'
+      Date: fmtDate(new Date(cp.date)), Agent:cp.agent, Contrat:cp.contrat,
+      DateVente: cp.dateVenteStr || '—', Echeance: cp.echeanceStr || '—',
+      Montant:cp.montant, DetteApres: (cp.detteApres!=null ? cp.detteApres : null),
+      Etat: cp.ferme ? 'Remboursé (payé) ✓' : 'Actée ✓'
     });
   });
   // 2. affectations en cours (dérivées) : bruts bloqués en attente d'être actés
@@ -2207,11 +2296,12 @@ async function renderCaisse(){
         formatter:c=>`<b style="color:#3fd6a4">−${c.getValue()} DH</b>`},
       {title:'Dette restante après (DH)', field:'DetteApres', hozAlign:'right', width:180,
         formatter:c=>c.getValue()===null?'<span style="color:var(--ink-dim)">—</span>':`<span style="color:${c.getValue()>0?'var(--amber)':'#8ea0bd'}">${c.getValue()} DH</span>`},
-      {title:'État', field:'Etat', width:130,
+      {title:'État', field:'Etat', width:150,
         formatter:c=>{
           const v=c.getValue();
-          const cls = v==='Actée ✓' ? 'ok' : (v==='Dette couverte' ? 'ok' : 'warn');
+          const cls = (v==='Actée ✓' || v==='Dette couverte' || v==='Remboursé (payé) ✓') ? 'ok' : 'warn';
           const tip = v==='Actée ✓' ? 'Compensation définitive : brut marqué Payé (compensation), dette réduite'
+            : v==='Remboursé (payé) ✓' ? 'Brut déjà payé portant « Dette à rembourser » : a remboursé l\'avance (compensation définitive, aucune sortie de caisse) — rien à acter'
             : (v==='Dette couverte' ? 'La dette est entièrement couverte par les bruts affectés — cliquez « Acter » dans le tableau des avances pour rendre la compensation définitive'
             : 'Brut affecté, dette non encore couverte en totalité');
           return `<span class="tag ${cls}" title="${tip}">${v}</span>`;
@@ -2228,11 +2318,15 @@ async function renderCaisse(){
   });
   agentsDistincts.forEach(a=>{ if(!byAgent[a]) byAgent[a] = {Agent:a, BrutGenere:0, BrutPaye:0}; });
   const recapData = Object.values(byAgent).map(a=>{
-    const avance = state.avances[a.Agent]||0;
-    const comp = compensationByAgent[a.Agent] || {compensation:0, detteRestante:avance};
+    const avance = state.avances[a.Agent]||0; // déjà net de tout remboursement ferme (persisté)
+    const comp = compensationByAgent[a.Agent] || {compensation:0, detteRestante:avance, rembourseFerme:0};
     // Reste payable à l'agent en cash = brut généré − brut déjà payé cash − brut affecté à la dette.
     const restePayable = Math.max(0, a.BrutGenere - a.BrutPaye - comp.compensation);
-    return { Agent:a.Agent, Avances:avance, Compense:comp.compensation, DetteRestante:comp.detteRestante,
+    // « Avance reçue » reconstruit le montant BRUT d'origine (avance stockée + ferme déjà remboursé) pour
+    // que les 3 colonnes restent additives : Avance reçue = Remboursé (ferme+attente) + Dette restante.
+    // « Remboursé par bruts » = compensation en attente (à acter) + remboursements fermes (persistés).
+    const rembourseFerme = comp.rembourseFerme||0;
+    return { Agent:a.Agent, Avances:avance+rembourseFerme, Compense:comp.compensation+rembourseFerme, DetteRestante:comp.detteRestante,
       BrutGenere:a.BrutGenere, BrutPaye:a.BrutPaye, RestePayable:restePayable };
   }).filter(a=>a.Avances!==0 || a.BrutGenere!==0).sort((x,y)=>y.DetteRestante-x.DetteRestante || y.RestePayable-x.RestePayable);
   createOrUpdateTabulator('tCaisseAgents', '#table-caisse-agents', recapData, {
@@ -3120,14 +3214,17 @@ function buildLignes(aSources, statusMap, hasCRM, statusSourcesRaw){
   // Fusion factorisée (identique au comportement historique) — réutilisée à la fois pour le chemin
   // normal ET pour un numéro redirigé suite à une inversion de catégorie détectée (voir plus bas) :
   // dans les deux cas, le contrat appartient à la MÊME ligne source, donc les mêmes champs s'appliquent.
-  function mergeIntoMintGroups(ref, agent, client, produit, dateVente, statutVente, payeBrut, sources){
-    const existing = mintGroups[ref] || { ref, agent:'', client:'', produit:'', dateVente:null, statutVente:null, payeBrut:null, sources:[] };
+  function mergeIntoMintGroups(ref, agent, client, produit, dateVente, statutVente, payeBrut, sources, detteARembourser){
+    const existing = mintGroups[ref] || { ref, agent:'', client:'', produit:'', dateVente:null, statutVente:null, payeBrut:null, detteARembourser:false, sources:[] };
     existing.agent = mergeStringField(existing.agent, agent);
     existing.client = mergeStringField(existing.client, client);
     existing.produit = mergeStringField(existing.produit, produit);
     existing.dateVente = (!existing.dateVente || (dateVente && dateVente < existing.dateVente)) ? dateVente : existing.dateVente;
     existing.statutVente = mergeStringField(existing.statutVente, statutVente);
     if(payeBrut && !existing.payeBrut) existing.payeBrut = payeBrut;
+    // « Dette à rembourser » (règle Direction 2026-07-17) : signal source indiquant qu'un brut payé
+    // rembourse l'avance de l'agent (compensation, pas de cash) — collant (une seule occurrence suffit).
+    if(detteARembourser) existing.detteARembourser = true;
     existing.sources = Array.from(new Set(existing.sources.concat(sources)));
     mintGroups[ref] = existing;
   }
@@ -3151,7 +3248,10 @@ function buildLignes(aSources, statusMap, hasCRM, statusSourcesRaw){
       commercial: colIndexByNames(src.header, ['Nom du Commercial','Nom du commercial']),
       contratConso: colIndexByNames(src.header, ['Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote','Numéro Contrat ConsoPilote','Numero Contrat ConsoPilote']),
       statutVente: colIndexByNames(src.header, ['statut de vente','Statut de vente','statut','STATUT']),
-      payeBrut: colIndexByNames(src.header, ['paye brut','payé brut','paye brut','brut paye'])
+      payeBrut: colIndexByNames(src.header, ['paye brut','payé brut','paye brut','brut paye']),
+      // « statut des paiments » (orthographe réelle du fichier source, variantes tolérées) : porte les
+      // mentions « dette remboursée » / « Dette à rembourser » — règle Direction 2026-07-17.
+      statutPaiements: colIndexByNames(src.header, ['statut des paiments','statut des paiements','statut paiement','statut paiments'])
     };
 
     src.rows.forEach(row=>{
@@ -3164,6 +3264,15 @@ function buildLignes(aSources, statusMap, hasCRM, statusSourcesRaw){
       const produit = cA.produit!==-1 ? row[cA.produit] : '';
       const statutVente = cA.statutVente!==-1 ? row[cA.statutVente] : null;
       const payeBrut = cA.payeBrut!==-1 ? row[cA.payeBrut] : null;
+      // « Dette à rembourser » / « dette remboursée » (les deux graphies existent dans les exports réels) :
+      // lu EXCLUSIVEMENT dans la colonne « statut des paiments » (règle utilisateur confirmée le
+      // 2026-07-17 : « l'interface ne rembourse la dette que si la mention est dans statut des
+      // paiements ») — aucune autre cellule de la ligne ne peut déclencher un remboursement ; un export
+      // sans cette colonne ne produit donc AUCUN remboursement ferme, par conception.
+      // Combiné à un brut payé, il signifie que ce brut a servi à rembourser l'avance de l'agent
+      // (compensation, aucune sortie de caisse) — voir computeAvanceCompensation / reconcileDetteFermes.
+      const isDetteFlag = c => c!=null && typeof c==='string' && norm(c).includes('dette') && norm(c).includes('rembours');
+      const detteARembourser = cA.statutPaiements!==-1 && isDetteFlag(row[cA.statutPaiements]);
       const sources = [`${src.fileName}:${src.sheetName}`];
 
       // --- MINT (colonne « Numéro Contrat Energie ») ---
@@ -3184,7 +3293,7 @@ function buildLignes(aSources, statusMap, hasCRM, statusSourcesRaw){
           return;
         }
         if(cls===null) contractAnomalies.push({ ref, colonne:'Numéro Contrat Energie (MINT)', client, agent, sources:sources.slice() });
-        mergeIntoMintGroups(ref, agent, client, produit, dateVente, statutVente, payeBrut, sources);
+        mergeIntoMintGroups(ref, agent, client, produit, dateVente, statutVente, payeBrut, sources, detteARembourser);
       });
 
       // --- CONSO (colonne « Numéro Contrat ConsoPilote ») — même règle, sens inverse ---
@@ -3194,7 +3303,7 @@ function buildLignes(aSources, statusMap, hasCRM, statusSourcesRaw){
           const cls = classifyContractRef(refConso);
           if(cls==='MINT'){
             contractSwaps.push({ ref:refConso, colonne:'Numéro Contrat ConsoPilote', corrigeVers:'MINT', client, agent, sources:sources.slice() });
-            mergeIntoMintGroups(refConso, agent, client, produit, dateVente, statutVente, payeBrut, sources);
+            mergeIntoMintGroups(refConso, agent, client, produit, dateVente, statutVente, payeBrut, sources, detteARembourser);
           } else {
             if(cls===null) contractAnomalies.push({ ref:refConso, colonne:'Numéro Contrat ConsoPilote', client, agent, sources:sources.slice() });
             mergeIntoConsoGroups(refConso, agent, client, dateVente, sources);
@@ -3299,7 +3408,11 @@ function buildLignes(aSources, statusMap, hasCRM, statusSourcesRaw){
       // payé auparavant → paiement suspendu/non payable (« — »). Sinon le brut reste toujours éditable.
       statutPaiementBrut: (brut===0 || (tempPerdue && !wasBrutPaid) || (cb.brutAnnule && !wasBrutPaid)) ? '—' : (manualOverride.statutPaiementBrut || (payeBrutPaid ? 'Payé' : 'Non Payé')),
       statutPaiementActivation: (tempPerdue && !wasActivPaid) ? '—' : (manualOverride.statutPaiementActivation || 'Non Payé'),
-      payeParCompensation: !!manualOverride.payeParCompensation, // brut réglé par compensation d'avance (pas de sortie de caisse)
+      // Brut payé + « Dette à rembourser » (source) : réglé par compensation d'avance → affiché « Payé
+      // (compensation) » et EXCLU de toute sortie de caisse (reconcileCaisseDebits/debitCaisseMint testent
+      // payeParCompensation). La réduction de l'avance est dérivée dans computeAvanceCompensation.
+      detteARembourser: !!item.detteARembourser,
+      payeParCompensation: !!manualOverride.payeParCompensation || (payeBrutPaid && !!item.detteARembourser && brut>0),
       datePaiementBrut: manualOverride.datePaiementBrut || null,
       motifQualite: manualOverride.motifQualite || '',
       pending: isPending,

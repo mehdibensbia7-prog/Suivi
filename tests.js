@@ -69,18 +69,54 @@ function paymentWindow1520(refDate){
 }
 
 let caisseCache = null, compensationMap = {}, compensationByAgent = {}, rawLignes = [];
+// saveCaisseState réel non copié (écrit dans IndexedDB) : les tests vérifient la mutation en mémoire de
+// `state`, pas la persistance — stub no-op documenté.
+async function saveCaisseState(){ return true; }
+
+async function reconcileDetteFermes(state){
+  let changed = false;
+  const nowIso = new Date().toISOString();
+  const byAgent = {};
+  rawLignes.forEach(l=>{
+    if(l.type!=='MINT' || !(l.brut>0) || l.brutAnnule || l.tempPerdue) return;
+    if(l.statutPaiementBrut!=='Payé' || !l.detteARembourser) return;
+    if(state.compensations.some(c=>c.lineId===l.id)) return;
+    (byAgent[l.agent] = byAgent[l.agent] || []).push(l);
+  });
+  Object.keys(byAgent).sort().forEach(agent=>{
+    byAgent[agent]
+      .sort((a,b)=>((+toDateSafe(a.dateVente))||0)-((+toDateSafe(b.dateVente))||0))
+      .forEach(l=>{
+        const avance = state.avances[agent]||0;
+        if(avance<=0) return;
+        const applied = Math.min(l.brut, avance);
+        const nouveau = Math.max(0, avance - applied);
+        if(nouveau<=0) delete state.avances[agent]; else state.avances[agent] = nouveau;
+        state.compensations.push({ date:nowIso, agent, lineId:l.id, contrat:l.contrat, montant:applied, ferme:true,
+          dateVenteStr:l.dateVenteStr, echeanceStr:l.vendrediPaiementStr||l.dateVenteStr, detteApres:nouveau });
+        state.avanceHistorique.push({ date:nowIso, agent, ancien:avance, nouveau,
+          motif:`Remboursement automatique (contrat ${l.contrat}, source « Dette à rembourser »)` });
+        changed = true;
+      });
+  });
+  if(changed) await saveCaisseState(state);
+  return state;
+}
+
 function computeAvanceCompensation(){
   compensationMap = {};
   compensationByAgent = {};
   const avances = (caisseCache && caisseCache.avances) ? caisseCache.avances : {};
+  const permCompensations = (caisseCache && caisseCache.compensations) ? caisseCache.compensations : [];
   const parAgent = {};
   rawLignes.forEach(l=>{
     if(l.type!=='MINT' || !(l.brut>0) || l.brutAnnule || l.tempPerdue || l.statutPaiementBrut==='Payé') return;
     (parAgent[l.agent] = parAgent[l.agent] || []).push(l);
   });
-  Object.keys(avances).forEach(agent=>{
+  const fermeAgents = new Set(permCompensations.filter(c=>c.ferme).map(c=>c.agent));
+  const agents = new Set([...Object.keys(avances), ...fermeAgents]);
+  agents.forEach(agent=>{
     const dette = avances[agent] || 0;
-    if(dette<=0) return;
     const lignes = (parAgent[agent]||[]).slice()
       .sort((a,b)=>((+toDateSafe(a.dateVente))||0)-((+toDateSafe(b.dateVente))||0));
     let remaining = dette;
@@ -92,7 +128,15 @@ function computeAvanceCompensation(){
       compensationMap[l.id] = { applied, agent };
       contrats.push({ lineId:l.id, contrat:l.contrat, dateVenteStr:l.dateVenteStr, echeanceStr:l.vendrediPaiementStr||l.dateVenteStr, montant:applied, detteApres:remaining });
     });
-    compensationByAgent[agent] = { dette, compensation:dette-remaining, detteRestante:remaining, contrats };
+    const fermes = permCompensations.filter(c=>c.ferme && c.agent===agent);
+    const rembourseFerme = fermes.reduce((s,c)=>s+c.montant,0);
+    const contratsFermes = fermes.map(c=>({ lineId:c.lineId, contrat:c.contrat, dateVenteStr:c.dateVenteStr, echeanceStr:c.echeanceStr, montant:c.montant, detteApres:c.detteApres }));
+    if(dette<=0 && rembourseFerme<=0) return;
+    compensationByAgent[agent] = {
+      dette, rembourseFerme, avanceEffective: dette,
+      compensation: dette - remaining, detteRestante: remaining,
+      contrats, contratsFermes
+    };
   });
 }
 function isBrutBlockedByAvance(id){ return !!(compensationMap[id] && compensationMap[id].applied > 0); }
@@ -1155,6 +1199,153 @@ sec('S15 · applyReglesToLignes — une session importée AVANT AGENT_INCONNU do
   eq('S15b agent normal jamais altéré', lignes[1].agent, 'Amine Jennane');
   eq('S15c ancien texte CONSO -> migré vers Panier Entreprise', lignes[2].agent, 'Panier Entreprise');
   eq('S15d déjà migré -> idempotent, inchangé', lignes[3].agent, 'Panier Entreprise');
+})();
+
+/* ===================== S16 — Remboursement FERME par « Dette à rembourser » (règle Direction 2026-07-17,
+   refonte persistante 2026-07-17 suite au bug rapporté par l'utilisateur) =====================
+   Historique : la 1ère version (même jour) dérivait le remboursement ferme EN DIRECT du flag source à
+   chaque rendu. Bug réel trouvé sur des exports successifs de l'utilisateur (tableau statut brut (4)→(7)) :
+   17 contrats marqués « dette remboursée » dans (4)/(6), seulement 3 encore marqués dans (7) — la Direction
+   EFFACE le flag une fois traité côté fichier, il est TRANSITOIRE. Un modèle purement dérivé « oubliait »
+   donc un remboursement déjà appliqué dès que l'utilisateur réimportait un export plus récent où le flag
+   avait disparu, faisant réapparaître une dette pourtant déjà soldée. Fix : reconcileDetteFermes applique
+   et PERSISTE chaque remboursement une seule fois dans state.compensations (idempotent par lineId), exactement
+   comme le bouton manuel « Acter » — computeAvanceCompensation ne fait plus que LIRE ce registre. */
+function state0(avances){ return { avances: Object.assign({}, avances), compensations: [], avanceHistorique: [] }; }
+
+sec('S16 · reconcileDetteFermes — remboursement ferme PERSISTANT (survit à un flag qui disparaît au réimport)');
+(function(){
+  // A1 — cas de base : avance 300, un brut payé+flag → applique 50, persiste dans compensations, journalise.
+  let st = state0({ Oussama: 300 });
+  rawLignes = [ mint('o1','Oussama',new Date(2026,6,16),{statutPaiementBrut:'Payé', detteARembourser:true}) ];
+  reconcileDetteFermes(st);
+  eq('S16a1 avance réduite en dur (300−50=250)', st.avances.Oussama, 250);
+  eq('S16a2 1 entrée persistée, ferme=true, montant=50', st.compensations.map(c=>[c.lineId,c.ferme,c.montant]), [['o1',true,50]]);
+  eq('S16a3 historique journalisé', st.avanceHistorique.length, 1);
+
+  // A2 — idempotence : rejouer sur le MÊME état ne double-applique rien (même ligne déjà dans le registre).
+  reconcileDetteFermes(st);
+  eq('S16a4 idempotent : avance toujours 250 (pas 200)', st.avances.Oussama, 250);
+  eq('S16a5 idempotent : toujours 1 seule entrée (pas 2)', st.compensations.length, 1);
+
+  // A3 — payé SANS le flag : comportement cash normal inchangé, rien de persisté.
+  st = state0({ Oussama: 300 });
+  rawLignes = [ mint('o2','Oussama',new Date(2026,6,16),{statutPaiementBrut:'Payé'}) ];
+  reconcileDetteFermes(st);
+  eq('S16a6 payé sans flag : avance inchangée (300)', st.avances.Oussama, 300);
+  eq('S16a7 payé sans flag : rien de persisté', st.compensations.length, 0);
+
+  // A4 — flag présent mais brut PAS ENCORE payé : pas de remboursement ferme (relève de la compensation en attente).
+  st = state0({ Oussama: 300 });
+  rawLignes = [ mint('o3','Oussama',new Date(2026,6,16),{detteARembourser:true}) ]; // statutPaiementBrut = 'Non Payé' par défaut
+  reconcileDetteFermes(st);
+  eq('S16a8 non payé + flag : rien de ferme tant que non payé', st.compensations.length, 0);
+
+  // A5 — brut annulé qualité / contrat introuvable : jamais de remboursement, même payé+flag.
+  st = state0({ Oussama: 300 });
+  rawLignes = [
+    mint('o4','Oussama',new Date(2026,6,16),{statutPaiementBrut:'Payé', detteARembourser:true, brutAnnule:true}),
+    mint('o5','Oussama',new Date(2026,6,16),{statutPaiementBrut:'Payé', detteARembourser:true, tempPerdue:true}),
+  ];
+  reconcileDetteFermes(st);
+  eq('S16a9 brutAnnule/tempPerdue exclus', st.compensations.length, 0);
+
+  // A6 — aucune avance enregistrée pour l'agent : pas d'application, ET pas marqué comme traité (pour
+  // qu'un futur rendu l'applique dès qu'une avance sera saisie — on ne doit jamais perdre l'information).
+  st = state0({}); // pas d'avance pour Oussama
+  rawLignes = [ mint('o6','Oussama',new Date(2026,6,16),{statutPaiementBrut:'Payé', detteARembourser:true}) ];
+  reconcileDetteFermes(st);
+  eq('S16a10 sans avance : rien appliqué', st.compensations.length, 0);
+  st.avances.Oussama = 100; // l'admin saisit l'avance après coup
+  reconcileDetteFermes(st);
+  eq('S16a11 avance ajoutée après coup : rattrapée au rendu suivant', st.avances.Oussama, 50);
+
+  // A7 — LE SCÉNARIO DU BUG RAPPORTÉ : le flag source disparaît à un réimport ultérieur (Direction l'efface
+  // une fois traité — observé 17→3 lignes entre les exports (4)/(6) et (7) du 17/07/2026, mêmes contrats).
+  // Round 1 : import initial avec le flag présent → remboursement appliqué et persisté.
+  st = state0({ Yassir: 100 });
+  rawLignes = [ mint('y1','Yassir',new Date(2026,6,16),{statutPaiementBrut:'Payé', detteARembourser:true}) ];
+  reconcileDetteFermes(st);
+  eq('S16b1 round1 (flag présent) : avance réduite à 50', st.avances.Yassir, 50);
+  // Round 2 : réimport d'un export PLUS RÉCENT où le flag a été effacé pour ce même contrat (même lineId
+  // 'y1', mais detteARembourser désormais false — reproduit exactement le fichier (7) vs (4)/(6) réel).
+  rawLignes = [ mint('y1','Yassir',new Date(2026,6,16),{statutPaiementBrut:'Payé', detteARembourser:false}) ];
+  reconcileDetteFermes(st);
+  eq('S16b2 round2 (flag disparu) : avance TOUJOURS 50 — remboursement déjà acquis non perdu', st.avances.Yassir, 50);
+  eq('S16b3 round2 : registre inchangé (1 entrée, pas de retrait)', st.compensations.length, 1);
+  // Vérifie que le pipeline complet (computeAvanceCompensation en aval) reflète bien 50, pas un retour à 100.
+  caisseCache = st;
+  computeAvanceCompensation();
+  eq('S16b4 pipeline complet : dette lue = 50 (jamais 100)', compensationByAgent.Yassir.dette, 50);
+})();
+
+sec('S16bis · computeAvanceCompensation — lit le remboursement ferme depuis le registre persisté (plus de flag re-scanné)');
+(function(){
+  // B1 — état post-reconcile simulé directement (registre déjà peuplé) : dette déjà nette, rembourseFerme
+  // = somme du registre, avanceEffective = alias de dette (plus de double soustraction).
+  caisseCache = {
+    avances: { Oussama: 250 },
+    compensations: [{ date:'2026-07-17', agent:'Oussama', lineId:'o1', contrat:'Co1', montant:50, ferme:true,
+                       dateVenteStr:'16/07/2026', echeanceStr:'17/07/2026', detteApres:250 }]
+  };
+  rawLignes = [];
+  computeAvanceCompensation();
+  let c = compensationByAgent.Oussama;
+  eq('S16c1 dette = valeur stockée (déjà nette)', c.dette, 250);
+  eq('S16c2 rembourseFerme = somme du registre', c.rembourseFerme, 50);
+  eq('S16c3 avanceEffective = alias de dette', c.avanceEffective, 250);
+  eq('S16c4 contratsFermes reconstruit depuis le registre', c.contratsFermes.map(x=>[x.contrat,x.montant]), [['Co1',50]]);
+
+  // B2 — mixte : ferme déjà persisté + un brut non payé s'affecte à la dette restante (comportement pending inchangé).
+  caisseCache = {
+    avances: { Oussama: 250 },
+    compensations: [{ date:'2026-07-17', agent:'Oussama', lineId:'o3', contrat:'Co3', montant:50, ferme:true }]
+  };
+  rawLignes = [ mint('o4','Oussama',new Date(2026,6,12)) ]; // non payé -> pending
+  computeAvanceCompensation();
+  c = compensationByAgent.Oussama;
+  eq('S16c5 pending = 50 (à acter)', c.compensation, 50);
+  eq('S16c6 dette restante = 200 (250 − 50 pending)', c.detteRestante, 200);
+  eq('S16c7 le brut ferme n\'est pas dans les contrats à acter', c.contrats.map(x=>x.contrat), ['Co4']);
+  // Réplique de l'agrégat « Avances remboursées par bruts (auto) » de renderCaisse (index.html) : doit
+  // sommer LES DEUX formes (ferme + en attente), pas seulement l'une des deux — sinon la carte Caisse
+  // sous-compte les remboursements fermes déjà acquis (bug corrigé le 2026-07-17).
+  const totalCompenseReplica = Object.values(compensationByAgent).reduce((s,a)=>s+a.compensation+a.rembourseFerme,0);
+  eq('S16c8 agrégat Caisse « remboursé » = ferme(50) + attente(50) = 100', totalCompenseReplica, 100);
+
+  // B3 — CAS RÉEL (Amine Jennane, 2026-07-17) : avance 300, 6 fermes × 50 = 300 → dette retombe PILE à 0,
+  // la clé est supprimée de `avances` (comme acterCompensation le fait déjà pour un solde manuel). L'agent
+  // doit malgré tout rester visible dans compensationByAgent avec son historique complet — sinon il
+  // disparaît purement et simplement des écrans Caisse dès que sa dette est soldée (bug corrigé le
+  // 2026-07-17, trouvé en testant avec les vraies données de l'utilisateur).
+  caisseCache = {
+    avances: {}, // clé supprimée : dette tombée à 0
+    compensations: Array.from({length:6}, (_,i)=>({ agent:'Amine', lineId:'a'+i, contrat:'Ca'+i, montant:50, ferme:true }))
+  };
+  rawLignes = [];
+  computeAvanceCompensation();
+  c = compensationByAgent.Amine;
+  eq('S16c9 agent soldé pile à 0 : reste visible (pas undefined)', !!c, true);
+  eq('S16c10 dette = 0 (clé absente de avances)', c.dette, 0);
+  eq('S16c11 rembourseFerme = 300 (historique complet préservé)', c.rembourseFerme, 300);
+  eq('S16c12 detteRestante = 0, compensation = 0 (rien en attente)', {r:c.detteRestante, p:c.compensation}, {r:0, p:0});
+
+  // B4 — contrôle négatif : un agent sans avance ET sans aucun historique ferme reste absent (comportement inchangé).
+  caisseCache = { avances: {}, compensations: [] };
+  rawLignes = [];
+  computeAvanceCompensation();
+  eq('S16c13 agent jamais concerné : toujours absent de compensationByAgent', compensationByAgent.Personne, undefined);
+})();
+
+sec('S16ter · isDetteFlag — prédicat de détection (inline dans buildLignes, index.html)');
+(function(){
+  // Doit accepter les DEUX graphies réellement rencontrées dans les exports, et rejeter les textes voisins.
+  const isDetteFlag = cc => cc!=null && typeof cc==='string' && norm(cc).includes('dette') && norm(cc).includes('rembours');
+  eq('S16d1 graphie 1 « Dette à rembourser » détectée', isDetteFlag('Dette à rembourser'), true);
+  eq('S16d2 graphie 2 « dette remboursée » détectée', isDetteFlag('dette remboursée'), true);
+  eq('S16d3 texte sans « rembours » rejeté', isDetteFlag('dette client'), false);
+  eq('S16d4 texte sans « dette » rejeté', isDetteFlag('remboursement caution'), false);
+  eq('S16d5 null/non-string rejetés', {a:isDetteFlag(null), b:isDetteFlag(50)}, {a:false, b:false});
 })();
 
 /* ===================== RÉSULTAT ===================== */
