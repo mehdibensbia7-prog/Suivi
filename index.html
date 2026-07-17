@@ -26,9 +26,9 @@
     document.head.appendChild(fallbackScript);
   }
 </script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" onerror="window.__xlsxLoadFailed=true; loadLocalXlsxFallback();"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer onerror="window.__xlsxLoadFailed=true; loadLocalXlsxFallback();"></script>
 <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
-<script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
+<script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js" defer></script>
 <style>
   :root{
     --bg:#0b1220; --panel:#111c2f; --panel2:#0e1830; --line:#1f2f4a;
@@ -1355,6 +1355,22 @@ function buildStatusMap(sources){
   return map;
 }
 
+// Réutilise l'instance Tabulator existante via setData() (évite le coût destroy()+new sur chaque
+// rendu) plutôt que de la recréer. CORRECTIF (2026-07-17, relecture) : `config.height` est recalculé
+// à CHAQUE appel selon `data.length` (par tous les appelants) mais n'était appliqué qu'à la création —
+// une fois le tableau créé (ex. 2 lignes → 152px), sa hauteur restait figée indéfiniment même après
+// un import ajoutant 50 lignes de plus, ou l'inverse. `setHeight()` la réapplique désormais aussi sur
+// le chemin de mise à jour.
+function createOrUpdateTabulator(refName, selector, data, config){
+  if(window[refName]){
+    window[refName].setData(data);
+    if(config && config.height!==undefined) window[refName].setHeight(config.height);
+  } else {
+    window[refName] = new Tabulator(selector, {data, ...config});
+  }
+  return window[refName];
+}
+
 function autoDetectAndProcess(){
   clearError();
   if(!workbooks.length) return;
@@ -1703,6 +1719,12 @@ function applyIntrouvableDecision(id, dec){
 // recalcule brut/net des lignes existantes après un changement de règle ou un rechargement de
 // session (sans re-parser les fichiers) — inclut la migration des anciennes lignes CONSO
 function applyReglesToLignes(){
+  // Migration (2026-07-17) : une session importée AVANT l'introduction du compte système « Panier
+  // Entreprise » porte encore l'ancien texte littéral « (agent non renseigné) » sur ses ventes à agent
+  // inconnu — invisible pour la carte Panier Entreprise et tout filtre par agent, qui ne reconnaissent
+  // que AGENT_INCONNU. `applyReglesToLignes` s'exécute à CHAQUE rechargement de session depuis
+  // IndexedDB (setCurrentSessionId), donc cette migration s'applique automatiquement sans réimport.
+  rawLignes.forEach(l=>{ if(l.agent==='(agent non renseigné)') l.agent = AGENT_INCONNU; });
   rawLignes.forEach(l=>{
     if(l.type==='MINT'){
       const eligible = brutEligible(l.dateVente);
@@ -2036,9 +2058,8 @@ async function renderCaisse(){
     ...state.mintDebits.map(d=>({Date:fmtDate(new Date(d.date)), Type:'Sortie auto (Brut MINT payé)', Detail:'Contrat '+d.contrat, Agent:d.agent, Montant:-d.montant})),
     ...Object.entries(state.avances).filter(([,v])=>v>0).map(([agent,v])=>({Date:'—', Type:'Sortie (avance active)', Detail:'Solde d\'avance en cours', Agent:agent, Montant:-v}))
   ].sort((a,b)=> (b.Date==='—'?0:new Date(b.Date.split('/').reverse().join('-'))) - (a.Date==='—'?0:new Date(a.Date.split('/').reverse().join('-'))));
-  if(window.tCaisseMouv) window.tCaisseMouv.destroy();
-  window.tCaisseMouv = new Tabulator('#table-caisse-mouvements', {
-    data:mouvements, layout:'fitDataStretch', height: mouvements.length?Math.min(80+mouvements.length*36,380)+'px':'80px',
+  createOrUpdateTabulator('tCaisseMouv', '#table-caisse-mouvements', mouvements, {
+    layout:'fitDataStretch', height: mouvements.length?Math.min(80+mouvements.length*36,380)+'px':'80px',
     placeholder:'Aucun mouvement — ajoutez des fonds ci-dessus.',
     columns:[
       {title:'Date', field:'Date', width:110},
@@ -2062,9 +2083,8 @@ async function renderCaisse(){
   if(curSel) selAvance.value = curSel;
 
   const avancesData = Object.entries(state.avances).filter(([,v])=>v!==0).map(([agent,montant])=>({agent, montant}));
-  if(window.tCaisseAvances) window.tCaisseAvances.destroy();
-  window.tCaisseAvances = new Tabulator('#table-caisse-avances', {
-    data:avancesData, layout:'fitDataStretch', height: avancesData.length?Math.min(80+avancesData.length*36,300)+'px':'80px',
+  createOrUpdateTabulator('tCaisseAvances', '#table-caisse-avances', avancesData, {
+    layout:'fitDataStretch', height: avancesData.length?Math.min(80+avancesData.length*36,300)+'px':'80px',
     placeholder:'Aucune avance active.',
     columns:[
       {title:'Agent', field:'agent', widthGrow:2},
@@ -2120,9 +2140,8 @@ async function renderCaisse(){
       });
     });
   });
-  if(window.tCaisseAutoTx) window.tCaisseAutoTx.destroy();
-  window.tCaisseAutoTx = new Tabulator('#table-caisse-autotx', {
-    data:autoTx, layout:'fitDataStretch', height: autoTx.length?Math.min(80+autoTx.length*36,420)+'px':'80px',
+  createOrUpdateTabulator('tCaisseAutoTx', '#table-caisse-autotx', autoTx, {
+    layout:'fitDataStretch', height: autoTx.length?Math.min(80+autoTx.length*36,420)+'px':'80px',
     placeholder:'Aucune avance non soldée à rembourser — aucun brut affecté pour le moment.',
     columns:[
       {title:'Date actée', field:'Date', width:110},
@@ -2162,9 +2181,8 @@ async function renderCaisse(){
     return { Agent:a.Agent, Avances:avance, Compense:comp.compensation, DetteRestante:comp.detteRestante,
       BrutGenere:a.BrutGenere, BrutPaye:a.BrutPaye, RestePayable:restePayable };
   }).filter(a=>a.Avances!==0 || a.BrutGenere!==0).sort((x,y)=>y.DetteRestante-x.DetteRestante || y.RestePayable-x.RestePayable);
-  if(window.tCaisseAgents) window.tCaisseAgents.destroy();
-  window.tCaisseAgents = new Tabulator('#table-caisse-agents', {
-    data:recapData, layout:'fitDataStretch', height: recapData.length?Math.min(80+recapData.length*36,420)+'px':'80px',
+  createOrUpdateTabulator('tCaisseAgents', '#table-caisse-agents', recapData, {
+    layout:'fitDataStretch', height: recapData.length?Math.min(80+recapData.length*36,420)+'px':'80px',
     placeholder:'Aucune donnée — importez un fichier de ventes.',
     columns:[
       {title:'Agent', field:'Agent', widthGrow:2},
@@ -2217,9 +2235,8 @@ function renderIdentificationConsopilote(){
     Fiabilite:r.fiabilite, Commentaire:r.commentaire,
     Contrat_Energie_Lie:r.contratEnergieLie, Date_Vente_Liee:r.dateVenteLiee
   }));
-  if(window.tIdentification) window.tIdentification.destroy();
-  window.tIdentification = new Tabulator('#table-identification', {
-    data, layout:'fitDataStretch', height: data.length?Math.min(80+data.length*36,520)+'px':'80px',
+  createOrUpdateTabulator('tIdentification', '#table-identification', data, {
+    layout:'fitDataStretch', height: data.length?Math.min(80+data.length*36,520)+'px':'80px',
     placeholder:'Aucune vente ConsoPilote détectée — importez un fichier.',
     columns:[
       {title:'N° Contrat ConsoPilote', field:'Contrat', width:150},
@@ -3537,9 +3554,8 @@ function renderSuivi(){
     Client: l.client, Produit: l.produit,
     Statut_CRM: l.type==='MINT' ? l.statutCRM : (l.statutCRM + (l.prelevement && l.prelevement!=='—' ? ' · prélèv. '+l.prelevement : ''))
   }));
-  if(tSuivi) tSuivi.destroy();
-  tSuivi = new Tabulator("#table-suivi", {
-    data, layout:"fitDataStretch", height:"420px", placeholder:"Aucune donnée — importez un fichier.",
+  createOrUpdateTabulator('tSuivi', "#table-suivi", data, {
+    layout:"fitDataStretch", height:"420px", placeholder:"Aucune donnée — importez un fichier.",
     columns:[
       {title:"Type", field:"Type", width:90, formatter: c=>{
         const v=c.getValue(); return `<span class="tag ${v==='MINT'?'ok':'warn'}">${v}</span>`;
@@ -3598,9 +3614,8 @@ function renderFinance(){
     };
   });
 
-  if(tFinance) tFinance.destroy();
-  tFinance = new Tabulator("#table-finance", {
-    data, layout:"fitDataStretch", height:"460px", placeholder:"Aucune donnée.",
+  createOrUpdateTabulator('tFinance', "#table-finance", data, {
+    layout:"fitDataStretch", height:"460px", placeholder:"Aucune donnée.",
     columns:[
       {title:"Type", field:"Type", width:70, formatter:c=>`<span class="tag ${c.getValue()==='MINT'?'ok':'warn'}">${c.getValue()}</span>`},
       {title:"Agent", field:"Agent", widthGrow:2},
@@ -3791,9 +3806,8 @@ function renderEcheancier1520(){
   }));
   if(attenteConso>0) rows.push({Fenetre:'En attente (Conso : statut ≠ Signé ou prélèvement inactif)', Net:0, Conso:attenteConso, Total:attenteConso, Echeances:attenteContrats, _attente:true});
 
-  if(window.tEch1520) window.tEch1520.destroy();
-  window.tEch1520 = new Tabulator(cont, {
-    data:rows, layout:"fitDataStretch", height:rows.length?Math.min(60+rows.length*36,340)+"px":"80px",
+  createOrUpdateTabulator('tEch1520', cont, rows, {
+    layout:"fitDataStretch", height:rows.length?Math.min(60+rows.length*36,340)+"px":"80px",
     placeholder:"Aucune échéance Net/Conso 15-20 en attente.",
     rowFormatter:row=>{
       const d = row.getData();
@@ -3876,9 +3890,8 @@ function renderDuParAgent(){
     .map(a=>Object.assign({}, a, {Total_du: a.Brut_du + a.Activ_du + a.Conso_du}))
     .filter(a=>a.Total_du>0 || a.Affecte>0)
     .sort((x,y)=>y.Total_du-x.Total_du);
-  if(window.tDuAgent) window.tDuAgent.destroy();
-  window.tDuAgent = new Tabulator(cont, {
-    data, layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,340)+"px":"80px",
+  createOrUpdateTabulator('tDuAgent', cont, data, {
+    layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,340)+"px":"80px",
     placeholder:"Rien à payer — tous les agents sont soldés.",
     columns:[
       {title:"Agent", field:"Agent", widthGrow:2},
@@ -3924,9 +3937,8 @@ function renderConsoEcheancier(){
       {Periode:'Perdu (statuts KO à l\'échéance des 2 mois)', Montant:perdu, Contrats:perduN}
     ])
     .map(r=>({Periode:r.Periode, Montant:r.Montant, Contrats:r.Contrats}));
-  if(window.tConsoEch) window.tConsoEch.destroy();
-  window.tConsoEch = new Tabulator(cont, {
-    data, layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,300)+"px":"80px",
+  createOrUpdateTabulator('tConsoEch', cont, data, {
+    layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,300)+"px":"80px",
     placeholder:"Aucune échéance Conso en attente.",
     columns:[
       {title:"Période", field:"Periode", widthGrow:2,
@@ -4010,9 +4022,8 @@ function renderPayroll(){
   const today = fmtDate(nextFriday(new Date()));
 
   const tbl = document.getElementById('table-payroll');
-  if(window.tPayroll) window.tPayroll.destroy();
-  window.tPayroll = new Tabulator(tbl, {
-    data, layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,320)+"px":"80px",
+  createOrUpdateTabulator('tPayroll', tbl, data, {
+    layout:"fitDataStretch", height:data.length?Math.min(60+data.length*36,320)+"px":"80px",
     placeholder:"Aucune échéance — importez un fichier.",
     rowFormatter:row=>{
       const d = row.getData();
@@ -4161,9 +4172,8 @@ function renderKPI(){
     Taux_Decommission: a.Ventes_MINT ? Math.round(100*a.Decommissionnees/a.Ventes_MINT)+'%' : '—'
   })).sort((a,b)=>b.Net_Total-a.Net_Total);
 
-  if(tKPI) tKPI.destroy();
-  tKPI = new Tabulator("#table-kpi", {
-    data, layout:"fitDataStretch", height:"420px", placeholder:"Aucune donnée.",
+  createOrUpdateTabulator('tKPI', "#table-kpi", data, {
+    layout:"fitDataStretch", height:"420px", placeholder:"Aucune donnée.",
     columns:[
       {title:"Agent", field:"Agent", widthGrow:2},
       {title:"Ventes MINT", field:"Ventes_MINT", hozAlign:"center"},
@@ -4202,9 +4212,8 @@ function renderAlertes(){
     Decision: l.introuvable ? INTROUVABLE_LABELS[l.introuvableDecision || 'attente'] : '—',
     _priorite: (l.needsQualityReview || l.tempPerdue) ? 0 : (l.pending ? 1 : 2)
   })).sort((a,b)=>a._priorite-b._priorite);
-  if(tAlertes) tAlertes.destroy();
-  tAlertes = new Tabulator("#table-alertes", {
-    data, layout:"fitDataStretch", height:"320px", placeholder:"Aucune alerte active.",
+  createOrUpdateTabulator('tAlertes', "#table-alertes", data, {
+    layout:"fitDataStretch", height:"320px", placeholder:"Aucune alerte active.",
     rowFormatter:row=>{
       if(row.getData().Alerte.includes('décision manager requise')) row.getElement().style.boxShadow = 'inset 3px 0 0 var(--amber)';
     },
@@ -4273,9 +4282,8 @@ function renderQualite(){
     };
   }).sort((a,b)=>(b.Revue_Necessaire?1:0)-(a.Revue_Necessaire?1:0));
 
-  if(tQualite) tQualite.destroy();
-  tQualite = new Tabulator("#table-qualite", {
-    data, layout:"fitDataStretch", height:"460px", placeholder:"Aucune donnée — importez un fichier.",
+  createOrUpdateTabulator('tQualite', "#table-qualite", data, {
+    layout:"fitDataStretch", height:"460px", placeholder:"Aucune donnée — importez un fichier.",
     rowFormatter:row=>{
       if(row.getData().Revue_Necessaire) row.getElement().style.boxShadow = 'inset 3px 0 0 var(--red)';
     },
@@ -4374,9 +4382,8 @@ function renderNegatifFinancier(){
     Agent: l.agent, Contrat: l.contrat, Date: l.dateVenteStr, Marque: l.type,
     Statut_Actuel: l.statutCRM, Perte_DH: perteMontant(l)
   }));
-  if(window.tNegatif) window.tNegatif.destroy();
-  window.tNegatif = new Tabulator("#table-negatif", {
-    data, layout:"fitDataStretch", height:"420px", placeholder:"Aucune perte détectée sur la période.",
+  createOrUpdateTabulator('tNegatif', "#table-negatif", data, {
+    layout:"fitDataStretch", height:"420px", placeholder:"Aucune perte détectée sur la période.",
     columns:[
       {title:"Règle", field:"Regle", width:110, formatter:c=>`<span class="tag ${c.getValue().startsWith('A')?'bad':'warn'}">${c.getValue()}</span>`},
       {title:"Agent", field:"Agent", widthGrow:2},
@@ -4446,9 +4453,8 @@ function renderBordereau(){
     });
   }).sort((x,y)=>y.Remun_Nette-x.Remun_Nette);
 
-  if(window.tBordereau) window.tBordereau.destroy();
-  window.tBordereau = new Tabulator("#table-bordereau", {
-    data, layout:"fitDataStretch", height:data.length?Math.min(80+data.length*38,460)+"px":"90px",
+  createOrUpdateTabulator('tBordereau', "#table-bordereau", data, {
+    layout:"fitDataStretch", height:data.length?Math.min(80+data.length*38,460)+"px":"90px",
     placeholder:"Aucune donnée sur la période sélectionnée.",
     rowFormatter:row=>{
       if(row.getData().Insuffisant) row.getElement().style.boxShadow = 'inset 3px 0 0 var(--red)';
@@ -4592,9 +4598,8 @@ function renderMesVentes(){
     Type:'CONSO', Date:l.dateVenteStr, Contrat:l.contrat, Statut_CRM:l.statutCRM,
     Brut:l.t1, Statut_Brut:consoTrancheDisplay(l,1), Activation:l.t2, Statut_Activation:consoTrancheDisplay(l,2), Decommissionne:l.t2Perdue?'T2 perdue':'NON', Net:l.net
   });
-  if(tMesVentes) tMesVentes.destroy();
-  tMesVentes = new Tabulator("#table-mesventes", {
-    data:detailData, layout:"fitDataStretch", height:"360px", placeholder:"Aucune vente trouvée pour ce nom.",
+  createOrUpdateTabulator('tMesVentes', "#table-mesventes", detailData, {
+    layout:"fitDataStretch", height:"360px", placeholder:"Aucune vente trouvée pour ce nom.",
     columns:[
       {title:"Type", field:"Type", width:80, formatter:c=>`<span class="tag ${c.getValue()==='MINT'?'ok':'warn'}">${c.getValue()}</span>`},
       {title:"Date vente", field:"Date", width:100},
@@ -4641,9 +4646,8 @@ function renderMesVentes(){
     const [da,ma,ya]=a.Vendredi.split('/'); const [db,mb,yb]=b.Vendredi.split('/');
     return new Date(ya,ma-1,da) - new Date(yb,mb-1,db);
   });
-  if(tMesVentesSemaine) tMesVentesSemaine.destroy();
-  tMesVentesSemaine = new Tabulator("#table-mesventes-semaine", {
-    data:weekData, layout:"fitDataStretch", height:weekData.length?Math.min(60+weekData.length*36,300)+"px":"70px",
+  createOrUpdateTabulator('tMesVentesSemaine', "#table-mesventes-semaine", weekData, {
+    layout:"fitDataStretch", height:weekData.length?Math.min(60+weekData.length*36,300)+"px":"70px",
     placeholder:"Rien à venir.",
     columns:[
       {title:"Vendredi", field:"Vendredi", widthGrow:1},
@@ -4676,9 +4680,8 @@ function renderMesVentes(){
     }
   });
   const monthData = Object.values(byMonth).sort((a,b)=>a._sort-b._sort).map(({_sort,...r})=>r);
-  if(tMesVentesMois) tMesVentesMois.destroy();
-  tMesVentesMois = new Tabulator("#table-mesventes-mois", {
-    data:monthData, layout:"fitDataStretch", height:monthData.length?Math.min(60+monthData.length*36,300)+"px":"70px",
+  createOrUpdateTabulator('tMesVentesMois', "#table-mesventes-mois", monthData, {
+    layout:"fitDataStretch", height:monthData.length?Math.min(60+monthData.length*36,300)+"px":"70px",
     placeholder:"Aucune donnée.",
     columns:[
       {title:"Mois", field:"Mois", widthGrow:2, formatter:c=>c.getValue().replace(/^./,ch=>ch.toUpperCase())},
@@ -4797,9 +4800,8 @@ function renderCalendarDetail(dateStr){
   const totalPaye = data.reduce((s,r)=>s+r.Brut_paye,0);
   data.push({Agent:'— TOTAL GLOBAL —', Brut_du:totalDu, Affecte:totalAffecte, Brut_paye:totalPaye, Total:totalDu+totalAffecte+totalPaye});
 
-  if(window.tCalDetail) window.tCalDetail.destroy();
-  window.tCalDetail = new Tabulator("#table-cal-detail", {
-    data, layout:"fitDataStretch", height:Math.min(60+data.length*38,360)+"px",
+  createOrUpdateTabulator('tCalDetail', "#table-cal-detail", data, {
+    layout:"fitDataStretch", height:Math.min(60+data.length*38,360)+"px",
     columns:[
       {title:"Agent", field:"Agent", widthGrow:2, formatter:c=> c.getValue().startsWith('—') ? `<b>${c.getValue()}</b>` : c.getValue()},
       {title:"Brut dû CASH (DH)", field:"Brut_du", hozAlign:"right", formatter:c=>`<b style="color:${c.getValue()>0?'#e8556f':'#8ea0bd'}">${c.getValue()} DH</b>`},

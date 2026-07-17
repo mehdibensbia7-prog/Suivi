@@ -1135,6 +1135,28 @@ sec('S14 · réplique — un numéro trouvé dans la mauvaise colonne est rediri
   eq('S14f numéro hors format en colonne ConsoPilote -> reste CONSO, signalé en anomalie (jamais de supposition)', decideColumn('CONSO','999999999'), { traiteComme:'CONSO', swap:false, anomalie:true });
 })();
 
+/* ===================== S15 — Migration agent inconnu sur session déjà importée (bug réel 2026-07-17) ===================== */
+sec('S15 · applyReglesToLignes — une session importée AVANT AGENT_INCONNU doit migrer vers "Panier Entreprise" au rechargement');
+(function(){
+  // Réplique de la ligne de migration ajoutée dans applyReglesToLignes (index.html) : un rechargement
+  // de session depuis IndexedDB ne re-parse jamais les fichiers sources, donc l'ancien texte littéral
+  // ne peut être corrigé qu'en le réécrivant explicitement sur les lignes déjà persistées.
+  function migrateAgentInconnu(lignes){
+    lignes.forEach(l=>{ if(l.agent==='(agent non renseigné)') l.agent = AGENT_INCONNU; });
+  }
+  const lignes = [
+    { id:'MINT-1', type:'MINT', agent:'(agent non renseigné)' },     // ancienne session, agent inconnu -> doit migrer
+    { id:'MINT-2', type:'MINT', agent:'Amine Jennane' },              // agent normal -> ne doit JAMAIS être touché
+    { id:'CONSO-1', type:'CONSO', agent:'(agent non renseigné)' },    // même migration côté CONSO
+    { id:'CONSO-2', type:'CONSO', agent:'Panier Entreprise' }         // déjà migré (import récent) -> inchangé, idempotent
+  ];
+  migrateAgentInconnu(lignes);
+  eq('S15a ancien texte MINT -> migré vers Panier Entreprise', lignes[0].agent, 'Panier Entreprise');
+  eq('S15b agent normal jamais altéré', lignes[1].agent, 'Amine Jennane');
+  eq('S15c ancien texte CONSO -> migré vers Panier Entreprise', lignes[2].agent, 'Panier Entreprise');
+  eq('S15d déjà migré -> idempotent, inchangé', lignes[3].agent, 'Panier Entreprise');
+})();
+
 /* ===================== RÉSULTAT ===================== */
 const summary = `RÉSULTAT : ${pass} PASS / ${fail} FAIL ${fail===0?'✓ — moteur financier conforme':'✗ — RÉGRESSION DÉTECTÉE, ne pas livrer'}`;
 if(typeof window!=='undefined') window.__testResult = {pass, fail, summary, log};
