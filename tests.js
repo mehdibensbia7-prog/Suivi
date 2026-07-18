@@ -1348,6 +1348,34 @@ sec('S16ter · isDetteFlag — prédicat de détection (inline dans buildLignes,
   eq('S16d5 null/non-string rejetés', {a:isDetteFlag(null), b:isDetteFlag(50)}, {a:false, b:false});
 })();
 
+/* ===================== S17 — harmoniseAgentNames : inversion Prénom/Nom (2026-07-18) =====================
+   Bug réel en production : le contrat 1832606 portait l'agent « Bouhdadi Yassir » (ordre inversé) alors que
+   toutes ses autres ventes utilisaient « Yassir Bouhdadi ». La similarité Levenshtein entre les deux formes
+   n'est que de ~7% (réordonner des mots réécrit la quasi-totalité de la chaîne caractère par caractère), bien
+   sous le seuil de fusion (80%) — l'agent devenait un « agent fantôme » distinct côté Caisse, dont l'avance
+   valait toujours 0 : son brut payé+« Dette à rembourser » ne remboursait donc JAMAIS la vraie avance de
+   l'agent (reconcileDetteFermes cherchait `state.avances[l.agent]` sous le mauvais nom). Fix : un signal sûr
+   et indépendant du seuil — mêmes mots (≥2), juste réordonnés → fusion garantie, quelle que soit la similarité
+   Levenshtein. Réplique exacte de la règle ajoutée dans harmoniseAgentNames (index.html). */
+sec('S17 · harmoniseAgentNames — inversion Prénom/Nom fusionnée malgré une similarité Levenshtein quasi nulle');
+(function(){
+  function sameWordsReordered(nameA, nameB){
+    const a = normalizeName(nameA), b = normalizeName(nameB);
+    const tokensA = a.split(' ').filter(Boolean).sort();
+    const tokensB = b.split(' ').filter(Boolean).sort();
+    return tokensA.length>=2 && tokensA.length===tokensB.length && tokensA.every((t,i)=>t===tokensB[i]);
+  }
+  const simOf = (nameA,nameB) => { const a=normalizeName(nameA), b=normalizeName(nameB); return 1 - levenshtein(a,b)/Math.max(a.length,b.length); };
+
+  eq('S17a cas réel : similarité Levenshtein ≈ 7% (très sous le seuil 80%)', Math.round(simOf('Yassir Bouhdadi','Bouhdadi Yassir')*100), 7);
+  eq('S17b mais mêmes mots réordonnés → fusion garantie', sameWordsReordered('Yassir Bouhdadi','Bouhdadi Yassir'), true);
+  eq('S17c insensible à la casse/accents (normalizeName)', sameWordsReordered('YASSIR bouhdadi','bouhdadi Yassir'), true);
+  eq('S17d nom à 3 mots, même règle', sameWordsReordered('Jean Paul Martin','Martin Jean Paul'), true);
+  eq('S17e mots différents (pas un simple réordonnancement) → rejeté', sameWordsReordered('Yassir Bouhdadi','Yassir Elhassani'), false);
+  eq('S17f un seul mot commun aux deux → rejeté (pas assez de signal, ≥2 mots requis)', sameWordsReordered('Yassir','Yassir'), false);
+  eq('S17g nombre de mots différent → rejeté', sameWordsReordered('Yassir Bouhdadi','Yassir Ben Bouhdadi'), false);
+})();
+
 /* ===================== RÉSULTAT ===================== */
 const summary = `RÉSULTAT : ${pass} PASS / ${fail} FAIL ${fail===0?'✓ — moteur financier conforme':'✗ — RÉGRESSION DÉTECTÉE, ne pas livrer'}`;
 if(typeof window!=='undefined') window.__testResult = {pass, fail, summary, log};

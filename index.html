@@ -3188,7 +3188,16 @@ function harmoniseAgentNames(){
       if(!a || !b) return;
       const dist = levenshtein(a,b);
       const sim = 1 - dist/Math.max(a.length,b.length);
-      if(sim >= SIMILARITY_THRESHOLD){
+      // Inversion Prénom/Nom (« Yassir Bouhdadi » vs « Bouhdadi Yassir ») : MÊMES mots, ordre différent —
+      // similarité Levenshtein quasi nulle (~7%, très sous le seuil 80%) car réordonner des mots réécrit
+      // la quasi-totalité de la chaîne caractère par caractère. Bug réel (2026-07-18) : un agent avec cette
+      // variante sur UN SEUL contrat devenait un « agent fantôme » distinct côté Caisse — son avance ne se
+      // remboursait jamais (reconcileDetteFermes cherchait `state.avances[l.agent]` sous le mauvais nom).
+      // Signal sûr et indépendant du seuil : mêmes mots (≥2), juste réordonnés → fusion garantie.
+      const tokensA = a.split(' ').filter(Boolean).sort();
+      const tokensB = b.split(' ').filter(Boolean).sort();
+      const sameWordsReordered = tokensA.length>=2 && tokensA.length===tokensB.length && tokensA.every((t,i)=>t===tokensB[i]);
+      if(sim >= SIMILARITY_THRESHOLD || sameWordsReordered){
         group.members.push(other);
         canonicalFor[other] = canonical;
       }
